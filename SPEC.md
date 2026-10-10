@@ -1,7 +1,7 @@
-# CR Servers connector: spec (draft v0.2)
+# CR Servers connector: spec (draft v0.3)
 
 **Status:** Proposal only. Nothing in this document is built or shipped.
-**Date:** 2026-10-10 (v0.1: 2026-10-07) · **Owner:** Xavier (decisions) · **Tracking:** internal issue tracker (pilot details and client data stay there, not in this public repo)
+**Date:** 2026-10-10 (v0.3: P1–P4 decided · v0.2: same day · v0.1: 2026-10-07) · **Owner:** Xavier (decisions) · **Tracking:** internal issue tracker (pilot details and client data stay there, not in this public repo)
 **Scope:** Level 2 of the "build your site with AI" plan. The AI assistant a client already pays for (ChatGPT, Claude, maybe Gemini) gets a safe, limited way to publish and maintain that client's site on CR Servers shared hosting (InterWorx/SiteWorx). The client needs no GitHub, no FTP and no developer.
 
 > **TL;DR:** We build one small CR Servers service. It exposes a **remote MCP server** (the standard that ChatGPT plugins and Claude connectors both speak) and an **OAuth server whose sign-in step is a custom HostBill client-area plugin**, so we never see a password. Behind it sits a deploy core that stages changes, shows a preview, and **records the previous version of every file a publish touches**, so any publish can be reverted with one call or one tap. That core writes only to the client's web root, using a per-site FTP account that cannot leave it. It's free with every shared hosting plan. Level 1 (pre-made prompts plus an upload page) runs on the same core.
@@ -20,12 +20,12 @@
 - **Support:** the HostBill support ticket team.
 - **Contact form** comes from the Edenia static deploy repo (`static-site-contact/`). The GitHub Action path stays available alongside the AI connectors.
 
-**New proposals in v0.2.** These need Xavier's yes or no, and are marked **[P1]–[P4]** where they appear:
-- **[P1] Revert records instead of snapshots.** At publish time, keep only the previous version of each file that publish overwrites or deletes. It's small, needs no retention debate and gives a real undo. *This refines the "no snapshots" decision, so it needs explicit acceptance.* Reasons are in §5.
-- **[P2] PHP only through managed components.** Static files by default. The AI can turn on vetted server-side components (the contact form first) but can't write arbitrary `.php`. Raw PHP becomes a later opt-in setting per site. *This narrows the "PHP allowed" decision.* Reasons are in §5.
-- **[P3] Component provisioning is a separate step.** The contact form needs files outside the web root and a pre-built `vendor/`, which the jailed deploy FTP account can't write. See §6, decision 7.
-- **[P4] Conflict detection and one publish at a time per site.** A publish is refused if the live site changed since the draft read it.
-- **Q5 resolved by [P1]:** host confirmation plus a revert record is the default. "Aprobar cada publicación" stays an optional per-site setting.
+**Proposals added in v0.2, accepted by Xavier on 2026-10-10 (v0.3).** They're marked **[P1]–[P4]** where they appear:
+- **[P1] Revert records instead of snapshots.** At publish time, keep only the previous version of each file that publish overwrites or deletes. It's small and gives a real undo. *Accepted with a smaller history: the last 5 releases per site.* This refines the "no snapshots" decision. Reasons are in §5.
+- **[P2] PHP only through managed components.** Static files by default. The AI can turn on vetted server-side components (the contact form first) but can't write arbitrary `.php`. Raw PHP becomes a later opt-in setting per site. *Accepted. This narrows the "PHP allowed" decision.* Reasons are in §5.
+- **[P3] Component provisioning is a separate step.** The contact form needs files outside the web root and a pre-built `vendor/`, which the jailed deploy FTP account can't write. *Accepted.* See §6, decision 7.
+- **[P4] Conflict detection and one publish at a time per site.** A publish is refused if the live site changed since the draft read it. *Accepted.*
+- **Q5 follows from [P1] (still to confirm):** host confirmation plus a revert record is the default. "Aprobar cada publicación" stays an optional per-site setting.
 
 ---
 
@@ -46,7 +46,7 @@ The pilot site is plain static HTML (one large `index.html`, images and several 
 **Goals**
 1. Connect an AI to one CR Servers site in under 3 minutes from a phone, with no passwords pasted into the chat or typed into our pages.
 2. The AI can read, stage, preview, publish and revert files in **that site's web root only**.
-3. **Every publish and every revert can be undone** with one tool call or one tap, for the last 20 publishes [P1]. Older restores go through the InterWorx nightly/weekly backups via a support ticket.
+3. **Every publish and every revert can be undone** with one tool call or one tap, for the last 5 publishes [P1]. Older restores go through the InterWorx nightly/weekly backups via a support ticket.
 4. A client can see everything the AI did (activity log) and revoke access at any time.
 5. Near-zero ops: one container, one database, one small bucket, no per-client manual steps after beta.
 
@@ -96,7 +96,7 @@ This table decides the design. Sources are in References. (Unchanged from v0.1.)
 4. User: "Publíquelo." The AI calls `publish`, the AI host shows its own confirmation for a destructive tool, and the user approves.
 5. The server checks that the live files haven't changed since the draft [P4], saves the revert record [P1], publishes, and returns "Publicado como versión #14. Para deshacer diga 'revierta la versión #14'."
 
-**D. Undo.** "Se dañó la página, vuelva a como estaba antes del último cambio." The AI calls `list_releases`, then `revert_release`, with confirmation. A revert is itself a release with its own revert record, so it can be undone too. If the AI isn't available, the client can do the same with **one tap** on `crservers.com/ia/sitios` (the shared Level 1 page). For anything older than the last 20 publishes, or damage not made through the connector, the page links to a pre-filled HostBill support ticket asking for an InterWorx backup restore.
+**D. Undo.** "Se dañó la página, vuelva a como estaba antes del último cambio." The AI calls `list_releases`, then `revert_release`, with confirmation. A revert is itself a release with its own revert record, so it can be undone too. If the AI isn't available, the client can do the same with **one tap** on `crservers.com/ia/sitios` (the shared Level 1 page). For anything older than the last 5 publishes, or damage not made through the connector, the page links to a pre-filled HostBill support ticket asking for an InterWorx backup restore.
 
 **E. Manage.** The same page lists connected AIs per site, the activity log, releases with a revert button, enabled components and a **Revocar acceso** button. It's also linked from the HostBill client area.
 
@@ -120,7 +120,7 @@ All tools are site-scoped: the token only works for the sites picked at consent.
 | `create_upload_link` | Short-lived (15 min) phone upload page for photos, videos or a ZIP into the draft | `changeset_id` → `url` | ❌ | ❌ | no |
 | `preview_changeset` | Runs scans and the conflict check, builds a private preview, plain diff summary | `changeset_id` → `{preview_url, summary, scan:{ok, findings[]}, conflicts[]}` | ✅* | — | no |
 | `publish` | **Conflict check → revert record → push the draft live** | `changeset_id` → `{release_id, live_url, files_changed}` | ❌ | ✅ | **yes**, host confirmation. Server refuses if scans fail or conflicts exist. Optional approval link (see §5) |
-| `list_releases` | The last 20 publishes and reverts, newest first | `site_id` → `[{release_id, created_at, cause: publish\|revert\|component, files_changed, revertible, by_app}]` | ✅ | — | no |
+| `list_releases` | The last 5 publishes and reverts, newest first | `site_id` → `[{release_id, created_at, cause: publish\|revert\|component, files_changed, revertible, by_app}]` | ✅ | — | no |
 | `revert_release` | Puts back the files as they were **before** the chosen release. Reverts every later release too, newest first | `site_id`, `release_id` → `{release_id (the new revert release), reverted[]}` | ❌ | ✅ | **yes** |
 | `list_components` | Managed components available and their state [P2] | `site_id` → `[{component, version, enabled, config_status}]` | ✅ | — | no |
 | `enable_component` | Installs or upgrades a managed component (v1: `contact_form`) and stores its settings | `site_id`, `component`, `settings{mail_to, …}` → `{status, next_steps}` | ❌ | ✅ | **yes** |
@@ -153,7 +153,7 @@ Design notes:
 | **Why no raw PHP in v1 [P2]** | Arbitrary PHP from an AI means code execution on a shared node. One prompt injection in a file the AI reads could plant a webshell, a phishing kit or a `mail()` spam relay. CageFS limits the blast radius, but not the abuse or the blacklisting of the node's IP. Managed components give clients the server-side features they actually ask for (forms first) without that risk. |
 | **Size / rate** | ≤25 MB per file (≤100 MB for mp4/webm), ≤200 MB and ≤2,000 files per change set, ≤30 publishes/day, ≤300 write calls/hour per site, all within the plan's disk quota. Limits are visible through `get_usage_limits`. |
 | **Scans before preview/publish** | ClamAV on all files. Secret scan (private keys, API-key patterns, passwords in JS). JS heuristics (cryptominer domains, `eval` of long base64). Phishing heuristics (password forms posting off-site, bank brand names). A **hard fail** blocks publish. Warnings are shown in the preview summary. |
-| **Revert records [P1]** | Before a publish changes anything live, the connector downloads and stores the **current version of every file the change set overwrites or deletes** (new files only need their path). Stored in our bucket, not counted against the client's quota. Keep the **last 20 releases per site**, with no time limit. A typical catalog edit stores a few hundred KB. Each release keeps a manifest of the hashes it wrote. |
+| **Revert records [P1]** | Before a publish changes anything live, the connector downloads and stores the **current version of every file the change set overwrites or deletes** (new files only need their path). Stored in our bucket, not counted against the client's quota. Keep the **last 5 releases per site**, with no time limit. A typical catalog edit stores a few hundred KB. Each release keeps a manifest of the hashes it wrote. |
 | **Why revert records and not "InterWorx backups only"** | Using only the nightly/weekly backups would mean: (1) everything published since the last nightly is lost on restore; (2) a SiteWorx partial restore can include mail and databases [R27], so an AI-triggered restore could roll back someone's email; (3) restoring through the API needs the SiteWorx reseller key, which decision 5 keeps out of the publish path; (4) publish isn't atomic (§6, decision 3), so a failure halfway would leave a half-updated site with nothing to roll back to. The pilot client asked for backups and restore specifically. Revert records answer that at a fraction of a snapshot's cost. InterWorx backups remain the disaster-recovery layer, reached through a support ticket. |
 | **Revert rules** | `revert_release(N)` restores the files to their state before release N by applying the revert records of the latest release down to N, newest first. Before reverting, the connector checks that the live hashes still match what those releases wrote. If they don't (manual FTP edits since), it refuses and lists the files. The revert is recorded as a new release, so it can be undone too. |
 | **Publish failure handling** | Phase 1: upload everything to temporary names. If any upload fails, the temporary files are deleted and nothing live has changed. Phase 2: rename into place, then delete removed files last. If phase 2 fails, the connector automatically applies the revert record for the paths already changed, then reports the failure. |
@@ -201,7 +201,7 @@ Design notes:
    - At provisioning we create a dedicated **deploy FTP sub-account** with `homedir` set to the site's web root and a random password stored encrypted (`/siteworx/ftp add`; `suspend` and `delete` for revoke) [R17].
    - Reads and writes go over **FTPS to the node hostname**. Our own static-deploy repo found that ProFTPd serves one node certificate, so FTPS to the client's domain can fail TLS [R25].
    - Publish = upload to temporary names → rename into place → delete removed files last. That is fast for small sites but **not atomic** (a seconds-long mixed window). Failures are rolled back with the revert record (§5). Acceptable for v1.
-4. **Undo is ours; disaster recovery is InterWorx's [P1].** The connector keeps file-level revert records for the last 20 releases. The InterWorx `/siteworx/backup` API exists [R26], but it can't be limited to web files through the API and a restore overwrites everything it covers [R27], so it's never called by the connector. Nightly/weekly InterWorx backups stay the safety net, restored by support on request.
+4. **Undo is ours; disaster recovery is InterWorx's [P1].** The connector keeps file-level revert records for the last 5 releases. The InterWorx `/siteworx/backup` API exists [R26], but it can't be limited to web files through the API and a restore overwrites everything it covers [R27], so it's never called by the connector. Nightly/weekly InterWorx backups stay the safety net, restored by support on request.
 5. **Provisioning keys stay out of the hot path.** The SiteWorx API with a reseller key + domain can manage any account on the node [R28], which makes it a high-value secret. It's used only by a separate provisioning job (pilot: create the FTP user by hand in SiteWorx, so **no NodeWorx key in the service at all**). Day-to-day publishing uses only per-site FTP credentials.
 6. **Where it runs.** The existing Kubernetes cluster, same pattern as crservers.com: a `v*` tag builds an image to GHCR, then the manifests in the repo's `k8s/` folder are applied. 1–2 replicas, managed Postgres, an S3-compatible bucket hosted in Costa Rica, ClamAV sidecar. TypeScript with the official MCP SDK fits the team's Next.js/TS stack. Alerts on publish failures, scan hits and auth errors go to the existing on-call channel, business hours only, because reverts are self-serve.
 7. **Managed components are installed by the provisioning job, not the deploy FTP user [P3].** The contact form (`static-site-contact/`) needs:
@@ -268,14 +268,12 @@ The same prompts ship as **skills inside the ChatGPT plugin** [R1], so users get
 
 **Settled 2026-10-07:** Q2 login (HostBill plugin), Q3 PHP (static by default; see [P2]), Q4 pricing (free), Q6 retention (no snapshots; see [P1]), Q7 hosting and identity, Q8 public listing from beta, Q9 support (HostBill ticket team).
 
+**Settled 2026-10-10:** [P1] revert records, last 5 releases per site · [P2] static + managed components, no raw PHP from the AI in v1 · [P3] components installed by a separate provisioning job (by hand in the pilot) · [P4] refuse publish on conflict, one publish/revert at a time per site.
+
 **Still open**
 1. **Pilot host (Q1):** which AI and plan does the pilot client use (ChatGPT Plus? Business?) and on which device? This decides whether the pilot runs on Claude, ChatGPT web, or waits for the published ChatGPT plugin.
 2. **Pilot prep (Q10):** the pilot site needs a valid SSL certificate before the pilot. OK to fix it on the client's account?
-3. **[P1] Revert records:** accept keeping the previous version of touched files for the last 20 releases per site, as a refinement of "no snapshots"?
-4. **[P2] Managed components only:** accept "no raw PHP from the AI in v1", with the contact form as a managed component and raw PHP as a later opt-in?
-5. **[P3] Component provisioning:** OK for the provisioning job to hold a credential that can write one level above the web root (for `~/private/smtp.config.php`)? Pilot: by hand.
-6. **[P4] Conflict check:** accept refusing a publish when the live site changed since the draft read it?
-7. **Q5 confirmation:** accept "host confirmation + revert record" as the default, with "Aprobar cada publicación" optional per site?
+3. **Q5 confirmation:** accept "host confirmation + revert record" as the default, with "Aprobar cada publicación" optional per site?
 
 ---
 

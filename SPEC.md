@@ -289,7 +289,7 @@ The same prompts ship as **skills inside the ChatGPT plugin** [R1], so users get
 **Still open**
 1. **Pilot user B write test:** on the iPhone (ChatGPT Pro), run a write action from any existing directory plugin. Confirms a published plugin can write on Pro in the iOS app.
 
-**Closed:** Q1 (2026-10-10: user A on ChatGPT Business, internal; user B on ChatGPT Pro, iOS). Q5 (decided 2026-10-10, §5 Confirmation). Q10.**Closed:** Q10. The pilot site already has a valid Let's Encrypt certificate (checked 2026-10-10). The 2026-10-07 "self-signed" finding came from a check without SNI, which gets another site's certificate on a shared IP. The connector doesn't depend on the site certificate anyway: it uses FTPS to the node hostname.
+**Closed:** Q1 (2026-10-10: user A on ChatGPT Business, internal; user B on ChatGPT Pro, iOS). Q5 (decided 2026-10-10, §5 Confirmation). Q10: the pilot site already has a valid Let's Encrypt certificate (checked 2026-10-10). The 2026-10-07 "self-signed" finding came from a check without SNI, which gets another site's certificate on a shared IP. The connector doesn't depend on the site certificate anyway: it uses FTPS to the node hostname.
 
 ---
 

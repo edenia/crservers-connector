@@ -7,14 +7,14 @@ Lets a CR Servers hosting client's own AI assistant (Claude, ChatGPT) publish an
 ## What it will be
 
 - A **remote MCP server** at `connect.crservers.com/mcp`, usable as a Claude custom connector and a ChatGPT plugin.
-- An **OAuth 2.1 authorization server** whose sign-in step is the CR Servers client area, via [hostbill-crsconnect](https://github.com/edenia/hostbill-crsconnect). We never see client passwords.
+- An **OAuth 2.1 authorization server** whose sign-in step is the CR Servers client area, via a HostBill client-area plugin (kept in a private repo). We never see client passwords.
 - A **deploy core** that stages changes, previews them, scans them, publishes to one site's web root only, and keeps a revert record of every publish.
 
 ## Related repos
 
 | Repo | Role |
 |---|---|
-| [edenia/hostbill-crsconnect](https://github.com/edenia/hostbill-crsconnect) | HostBill client-area plugin: sign-in, consent, site picker |
+| `edenia/hostbill-crsconnect` (private) | HostBill client-area plugin: sign-in, consent, site picker |
 | [edenia/crservers-static-deploy](https://github.com/edenia/crservers-static-deploy) | GitHub Action deploy path, and the contact form component |
 
 ## Security

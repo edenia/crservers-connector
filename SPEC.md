@@ -224,7 +224,7 @@ Design notes:
 | Repo | Status | Holds |
 |---|---|---|
 | `edenia/crservers-connector` | new | MCP server, OAuth AS, deploy core, preview/upload/manage pages, component installer job, ChatGPT plugin package, `k8s/` manifests and deploy workflows. This spec lives here as `SPEC.md`. |
-| `edenia/hostbill-crsconnect` | new | The HostBill client-area plugin (PHP, Smarty templates) |
+| `edenia/hostbill-crsconnect` | new, **private** | The HostBill client-area plugin (PHP, Smarty templates) |
 | `edenia/crservers.com` | existing | `/ia` pages, KB prompts ES/EN, `/ia/llms.txt`, tracking issues |
 | `edenia/crservers-static-deploy` | existing | Contact form component source (versioned releases the installer pins), FTPS/InterWorx notes |
 

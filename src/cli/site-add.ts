@@ -1,14 +1,14 @@
 /**
  * Pilot: register a site whose deploy FTP user was created by hand in SiteWorx.
- *   pnpm site:add --account 15 --domain example.com --ftp-host iwx41.crservers.com --ftp-user crsconnect@example.com
+ *   pnpm site:add --account 15  (in the cluster: kubectl exec -i deploy/connector -- node dist/cli/site-add.js …) --domain example.com --ftp-host iwx41.crservers.com --ftp-user crsconnect@example.com
  * Reads the FTP password from stdin (never from argv, so it stays out of shell history).
  */
 import { parseArgs } from 'node:util';
 import pg from 'pg';
-import { loadConfig } from '../src/config.js';
-import { fromB64url } from '../src/crypto.js';
-import { migrate } from '../src/db/migrate.js';
-import { SiteRepo } from '../src/sites.js';
+import { loadConfig } from '../config.js';
+import { fromB64url } from '../crypto.js';
+import { migrate } from '../db/migrate.js';
+import { SiteRepo } from '../sites.js';
 
 const { values } = parseArgs({
   options: { account: { type: 'string' }, domain: { type: 'string' }, 'ftp-host': { type: 'string' }, 'ftp-user': { type: 'string' } },

@@ -1,0 +1,41 @@
+# Traefik, same pattern as crservers.com: HTTP redirects to HTTPS; TLS via the cluster's Let's Encrypt resolver.
+apiVersion: traefik.containo.us/v1alpha1
+kind: Middleware
+metadata:
+  name: https-redirect
+spec:
+  redirectScheme:
+    scheme: https
+    permanent: true
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: connector-http
+spec:
+  entryPoints: [web]
+  routes:
+    - kind: Rule
+      match: Host(`${INGRESS_HOST}`)
+      middlewares:
+        - name: https-redirect
+      services:
+        - kind: Service
+          name: connector
+          port: 8080
+---
+apiVersion: traefik.containo.us/v1alpha1
+kind: IngressRoute
+metadata:
+  name: connector-https
+spec:
+  entryPoints: [websecure]
+  routes:
+    - kind: Rule
+      match: Host(`${INGRESS_HOST}`)
+      services:
+        - kind: Service
+          name: connector
+          port: 8080
+  tls:
+    certResolver: myresolver

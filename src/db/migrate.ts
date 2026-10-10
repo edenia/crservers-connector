@@ -75,6 +75,60 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       CREATE INDEX tokens_grant ON tokens (grant_id);
     `,
   },
+  {
+    id: '002_deploy_state',
+    sql: `
+      CREATE TABLE drafts (
+        id                 uuid PRIMARY KEY,
+        site_id            uuid NOT NULL REFERENCES sites(id),
+        note               text NOT NULL DEFAULT '',
+        created_at         timestamptz NOT NULL,
+        expires_at         timestamptz NOT NULL,
+        version            integer NOT NULL,
+        previewed_version  integer,
+        base               jsonb NOT NULL,
+        start_fingerprints jsonb NOT NULL,
+        early_conflicts    jsonb NOT NULL
+      );
+      CREATE INDEX drafts_expires ON drafts (expires_at);
+
+      CREATE TABLE draft_files (
+        draft_id  uuid NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+        path      text NOT NULL,
+        deleted   boolean NOT NULL,
+        sha256    text,
+        content   bytea,
+        PRIMARY KEY (draft_id, path)
+      );
+
+      CREATE TABLE releases (
+        id          uuid PRIMARY KEY,
+        site_id     uuid NOT NULL REFERENCES sites(id),
+        number      integer NOT NULL,
+        created_at  timestamptz NOT NULL,
+        cause       text NOT NULL CHECK (cause IN ('publish', 'revert')),
+        by_app      text NOT NULL,
+        files       jsonb NOT NULL,
+        UNIQUE (site_id, number)
+      );
+
+      -- Revert-record content (pilot: in Postgres; an S3-compatible bucket later).
+      CREATE TABLE blobs (
+        key   text PRIMARY KEY,
+        data  bytea NOT NULL
+      );
+
+      CREATE TABLE audit_log (
+        id         bigserial PRIMARY KEY,
+        site_id    uuid NOT NULL REFERENCES sites(id),
+        at         timestamptz NOT NULL DEFAULT now(),
+        client_id  text NOT NULL,
+        action     text NOT NULL,
+        detail     jsonb NOT NULL DEFAULT '{}'
+      );
+      CREATE INDEX audit_site_at ON audit_log (site_id, at DESC);
+    `,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

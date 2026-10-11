@@ -2,6 +2,8 @@ import express, { type Express } from 'express';
 import { createOAuthMetadata, mcpAuthRouter } from '@modelcontextprotocol/sdk/server/auth/router.js';
 import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middleware/bearerAuth.js';
 import type { ConnectorOAuthProvider } from './auth/provider.js';
+import { mcpHandler, mcpMethodNotAllowed } from './mcp/handler.js';
+import type { McpDeps } from './mcp/tools.js';
 
 export const SCOPES_SUPPORTED = ['site', 'offline_access'];
 
@@ -9,11 +11,12 @@ export interface AppDeps {
   provider: ConnectorOAuthProvider;
   issuer: string;
   mcpUrl: string;
+  mcp: McpDeps;
 }
 
 /**
  * HTTP surface: OAuth (SDK router + our metadata additions), the HostBill callback,
- * health, and (next slice) the MCP endpoint behind bearer auth.
+ * health, and the MCP endpoint behind bearer auth.
  */
 export function createApp(d: AppDeps): Express {
   const app = express();
@@ -50,11 +53,10 @@ export function createApp(d: AppDeps): Express {
     resourceMetadataUrl: `${d.issuer}/.well-known/oauth-protected-resource/mcp`,
   });
 
-  // Placeholder until the MCP slice: proves the token → site mapping end to end.
-  app.get('/mcp/whoami', bearer, (req, res) => {
-    const extra = req.auth?.extra ?? {};
-    res.json({ clientId: req.auth?.clientId, siteId: extra.siteId, permission: extra.permission });
-  });
+  // 5 MB of file content per write call is ~6.7 MB once base64-encoded inside JSON-RPC.
+  app.post('/mcp', bearer, express.json({ limit: '8mb' }), mcpHandler(d.mcp));
+  app.get('/mcp', mcpMethodNotAllowed);
+  app.delete('/mcp', mcpMethodNotAllowed);
 
   return app;
 }

@@ -5,6 +5,9 @@ import { ConnectorOAuthProvider } from './auth/provider.js';
 import { loadConfig } from './config.js';
 import { fromB64url } from './crypto.js';
 import { migrate } from './db/migrate.js';
+import { DeployCore } from './deploy/core.js';
+import { FtpSiteFs } from './deploy/ftpfs.js';
+import { AuditLog, PgBlobStore, PgDraftStore, PgReleaseStore } from './deploy/pgstores.js';
 import { createApp } from './http.js';
 import { SiteRepo } from './sites.js';
 
@@ -13,10 +16,11 @@ const pool = new pg.Pool({ connectionString: cfg.DATABASE_URL, max: 10 });
 const applied = await migrate(pool);
 if (applied.length) console.log(`migrations applied: ${applied.join(', ')}`);
 
+const sites = new SiteRepo(pool, fromB64url(cfg.ENCRYPTION_KEY));
 const provider = new ConnectorOAuthProvider({
   pool,
   clients: new PgClientsStore(pool, cfg.redirectAllowlist),
-  sites: new SiteRepo(pool, fromB64url(cfg.ENCRYPTION_KEY)),
+  sites,
   hostbill: new HostbillClient(cfg.HOSTBILL_URL, cfg.HOSTBILL_API_ID, cfg.HOSTBILL_API_KEY),
   issuer: cfg.PUBLIC_URL,
   mcpUrl: cfg.mcpUrl,
@@ -24,7 +28,10 @@ const provider = new ConnectorOAuthProvider({
   reqKey: fromB64url(cfg.REQ_KEY),
 });
 
-const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl });
+const core = new DeployCore({ drafts: new PgDraftStore(pool), releases: new PgReleaseStore(pool), blobs: new PgBlobStore(pool) });
+const mcp = { core, sites, audit: new AuditLog(pool), openFs: async (siteId: string) => new FtpSiteFs(await sites.ftpConfig(siteId)) };
+
+const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp });
 const server = app.listen(cfg.PORT, () => console.log(`crservers-connector listening on :${cfg.PORT} (${cfg.PUBLIC_URL})`));
 
 for (const sig of ['SIGTERM', 'SIGINT'] as const) {

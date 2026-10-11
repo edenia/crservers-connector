@@ -32,7 +32,7 @@ rules:
   - apiGroups: [apps]
     resources: [deployments, statefulsets, replicasets]
     verbs: [get, list, watch, create, update, patch]
-  - apiGroups: [traefik.containo.us]
+  - apiGroups: [traefik.io]
     resources: [ingressroutes, middlewares]
     verbs: [get, list, watch, create, update, patch]
 ---

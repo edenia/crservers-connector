@@ -1,0 +1,110 @@
+name: Deploy
+
+# Tag v* → test, build image to GHCR, apply k8s/ to the crservers-connector namespace.
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  test:
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    # Holds the secrets below; add required reviewers on this environment in repo settings.
+    environment: production
+    env:
+      NAMESPACE: crservers-connector
+      IMAGE: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
+      VERSION: ${{ github.ref_name }}
+      INGRESS_HOST: ${{ vars.INGRESS_HOST }}
+      HOSTBILL_URL: ${{ vars.HOSTBILL_URL }}
+      EXTRA_REDIRECT_URIS: ${{ vars.EXTRA_REDIRECT_URIS }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          tags: ${{ env.IMAGE }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install kubectl
+        run: |
+          set -euo pipefail
+          version="v1.32.13"
+          expected="db2ae479a63f3665d7f704ab18c0d4d4050144237980763221835b7305703c4c"
+          curl -fsSL -o kubectl "https://dl.k8s.io/release/${version}/bin/linux/amd64/kubectl"
+          echo "${expected}  kubectl" | sha256sum -c -
+          sudo install -m 0755 kubectl /usr/local/bin/kubectl && rm -f kubectl
+
+      - name: Configure kubeconfig (namespace-scoped deployer)
+        env:
+          KUBE_CONFIG_DATA: ${{ secrets.KUBE_CONFIG_DATA }}
+        run: |
+          set -euo pipefail
+          umask 077
+          mkdir -p "${RUNNER_TEMP}/kube"
+          printf '%s' "${KUBE_CONFIG_DATA}" | base64 --decode > "${RUNNER_TEMP}/kube/config"
+          echo "KUBECONFIG=${RUNNER_TEMP}/kube/config" >> "${GITHUB_ENV}"
+
+      - name: Apply secrets
+        env:
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          HOSTBILL_API_ID: ${{ secrets.HOSTBILL_API_ID }}
+          HOSTBILL_API_KEY: ${{ secrets.HOSTBILL_API_KEY }}
+          REQ_KEY: ${{ secrets.REQ_KEY }}
+          ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
+        run: |
+          set -euo pipefail
+          kubectl -n "$NAMESPACE" create secret generic connector-postgres \
+            --from-literal=POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
+            --dry-run=client -o yaml | kubectl apply -n "$NAMESPACE" -f -
+          kubectl -n "$NAMESPACE" create secret generic connector-secrets \
+            --from-literal=DATABASE_URL="postgres://connector:${POSTGRES_PASSWORD}@postgres.${NAMESPACE}.svc:5432/connector" \
+            --from-literal=HOSTBILL_API_ID="$HOSTBILL_API_ID" \
+            --from-literal=HOSTBILL_API_KEY="$HOSTBILL_API_KEY" \
+            --from-literal=REQ_KEY="$REQ_KEY" \
+            --from-literal=ENCRYPTION_KEY="$ENCRYPTION_KEY" \
+            --dry-run=client -o yaml | kubectl apply -n "$NAMESPACE" -f -
+
+      - name: Render and apply manifests
+        run: |
+          set -euo pipefail
+          test -n "$INGRESS_HOST" && test -n "$HOSTBILL_URL"
+          mkdir -p build_k8s
+          for f in k8s/*.yml; do envsubst '${IMAGE} ${VERSION} ${INGRESS_HOST} ${HOSTBILL_URL} ${EXTRA_REDIRECT_URIS}' < "$f" > "build_k8s/$(basename "$f")"; done
+          kubectl apply -n "$NAMESPACE" -f build_k8s/postgres.yml
+          kubectl -n "$NAMESPACE" rollout status statefulset/connector-postgres --timeout=300s
+          kubectl apply -n "$NAMESPACE" -f build_k8s/app.yml -f build_k8s/ingress.yml
+          kubectl -n "$NAMESPACE" rollout status deployment/connector --timeout=300s
+
+      - name: Smoke test
+        run: |
+          set -euo pipefail
+          for i in $(seq 1 30); do
+            if curl -fsS "https://${INGRESS_HOST}/healthz"; then exit 0; fi
+            sleep 10
+          done
+          echo "::warning::healthz not reachable yet (DNS or certificate still pending?)"

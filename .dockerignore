@@ -1,0 +1,10 @@
+node_modules
+dist
+test
+docs
+k8s
+.git
+.github
+.env
+.env.*
+*.md

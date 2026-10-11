@@ -56,7 +56,29 @@ kubectl --context edenia-prod -n crservers-connector exec -i deploy/connector --
   --ftp-host <node>.crservers.com --ftp-user <user>@<domain> < password-file
 ```
 
+## Backups
+
+Two layers. Both were tested on 2026-10-11, including a restore drill.
+
+| Layer | What | When | Kept | Where |
+|---|---|---|---|---|
+| Logical | `CronJob/connector-pg-dump`: `pg_dump -Fc`, checked with `pg_restore -l`; the job fails if the dump is unreadable | 03:15 Costa Rica | 7 days | `PVC/connector-dumps` |
+| Block | Longhorn `RecurringJob/crservers-connector-backup` (`k8s/bootstrap/longhorn-backup.yml`) for both volumes (Postgres data and dumps) | 03:30 | 14 | the cluster backup target (NFS on the NAS) |
+
+New volumes join the Longhorn job by label, applied by an admin:
+
+```bash
+kubectl --context edenia-prod -n longhorn-system label volumes.longhorn.io <pv-name> recurring-job-group.longhorn.io/crservers-connector=enabled
+```
+
+**Restore from a dump:**
+1. Run a one-off Job with the Postgres image, the dumps volume mounted read-only, and `PG*` env from `connector-postgres`.
+2. `pg_restore -d <db> --no-owner /dumps/connector-<date>.dump`.
+
+Drill first into a scratch database: create `restore_drill`, restore, compare row counts with the live database, drop it.
+
+**Restore a whole volume:** from the Longhorn UI, restore the backup to a new volume, then point the StatefulSet's PVC at it.
+
 ## Known gaps
 
-- **Backups:** Postgres isn't backed up beyond Longhorn replicas yet. Add a `pg_dump` CronJob or Longhorn recurring backups before real clients rely on revert history.
 - **Single replica:** move the publish lock to a Postgres advisory lock before scaling out.

@@ -1,0 +1,67 @@
+# Daily logical dump of the connector database (kept 7 days on its own volume, which the
+# Longhorn recurring backup also copies off-cluster). Restore: docs/DEPLOY.md "Backups".
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: connector-dumps
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: crservers-connector-storage
+  resources:
+    requests: { storage: 5Gi }
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: connector-pg-dump
+spec:
+  schedule: '15 3 * * *'
+  timeZone: America/Costa_Rica
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 70
+            fsGroup: 70
+            seccompProfile: { type: RuntimeDefault }
+          containers:
+            - name: dump
+              image: postgres:17.11-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
+              env:
+                - { name: PGHOST, value: postgres }
+                - { name: PGUSER, value: connector }
+                - { name: PGDATABASE, value: connector }
+                - name: PGPASSWORD
+                  valueFrom: { secretKeyRef: { name: connector-postgres, key: POSTGRES_PASSWORD } }
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  f="/dumps/connector-$(date +%Y%m%d-%H%M).dump"
+                  pg_dump -Fc -f "$f.part"
+                  pg_restore -l "$f.part" > /dev/null   # fails the job if the dump is unreadable
+                  mv "$f.part" "$f"
+                  find /dumps -name 'connector-*.dump' -mtime +7 -delete
+                  ls -l /dumps
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities: { drop: [ALL] }
+              volumeMounts:
+                - { name: dumps, mountPath: /dumps }
+                - { name: tmp, mountPath: /tmp }
+              resources:
+                requests: { cpu: 50m, memory: 64Mi }
+                limits: { cpu: 500m, memory: 256Mi }
+          volumes:
+            - name: dumps
+              persistentVolumeClaim: { claimName: connector-dumps }
+            - name: tmp
+              emptyDir: {}

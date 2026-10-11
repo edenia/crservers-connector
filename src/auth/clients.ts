@@ -53,6 +53,17 @@ export class PgClientsStore implements OAuthRegisteredClientsStore {
     return full;
   }
 
+  /** Display name for logs: client_name, else the client host, else the id. */
+  async displayName(clientId: string): Promise<string> {
+    const c = await this.getClient(clientId).catch(() => undefined);
+    if (c?.client_name) return c.client_name;
+    try {
+      return new URL(clientId).hostname;
+    } catch {
+      return clientId;
+    }
+  }
+
   private isCimdUrl(id: string): boolean {
     let u: URL;
     try {

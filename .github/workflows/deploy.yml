@@ -97,7 +97,7 @@ jobs:
           for f in k8s/*.yml; do envsubst '${IMAGE} ${VERSION} ${INGRESS_HOST} ${HOSTBILL_URL} ${EXTRA_REDIRECT_URIS}' < "$f" > "build_k8s/$(basename "$f")"; done
           kubectl apply -n "$NAMESPACE" -f build_k8s/postgres.yml
           kubectl -n "$NAMESPACE" rollout status statefulset/connector-postgres --timeout=300s
-          kubectl apply -n "$NAMESPACE" -f build_k8s/app.yml -f build_k8s/ingress.yml
+          kubectl apply -n "$NAMESPACE" -f build_k8s/app.yml -f build_k8s/ingress.yml -f build_k8s/backup.yml
           kubectl -n "$NAMESPACE" rollout status deployment/connector --timeout=300s
 
       - name: Smoke test

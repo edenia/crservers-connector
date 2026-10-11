@@ -63,7 +63,8 @@ beforeAll(async () => {
     reqKey,
   });
   const core = new DeployCore({ drafts: new PgDraftStore(pool), releases: new PgReleaseStore(pool), blobs: new PgBlobStore(pool) });
-  const mcp = { core, sites, audit: new AuditLog(pool), openFs: async () => siteFs };
+  const clientsForNames = new PgClientsStore(pool, [CHATGPT]);
+  const mcp = { core, sites, audit: new AuditLog(pool), openFs: async () => siteFs, appName: (id: string) => clientsForNames.displayName(id) };
   server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp }));
 });
 
@@ -251,7 +252,7 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     const { tools } = await c.listTools();
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
     expect(Object.keys(byName).sort()).toEqual(
-      ['delete_files', 'discard_changeset', 'get_activity_log', 'get_site_info', 'get_usage_limits', 'list_files', 'list_releases', 'list_sites', 'preview_changeset', 'publish', 'read_file', 'revert_release', 'start_changeset', 'write_files'].sort(),
+      ['delete_files', 'discard_changeset', 'edit_file', 'get_activity_log', 'get_site_info', 'get_usage_limits', 'list_files', 'list_releases', 'list_sites', 'preview_changeset', 'publish', 'read_file', 'revert_release', 'start_changeset', 'write_files'].sort(),
     );
     for (const t of tools) {
       expect(t.annotations, t.name).toMatchObject({ readOnlyHint: expect.any(Boolean), destructiveHint: expect.any(Boolean), openWorldHint: expect.any(Boolean) });
@@ -302,6 +303,7 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
 
     const log = await call(c, 'get_activity_log', { limit: 10 });
     expect(log.data.events.map((e: Structured) => e.action)).toEqual(['revert', 'publish', 'start_changeset']);
+    expect(new Set(log.data.events.map((e: Structured) => e.by_app))).toEqual(new Set(['ChatGPT']));
     await c.close();
   });
 
@@ -329,5 +331,47 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     expect(r.data.text).toBe('persisted');
     expect((await call(c2, 'read_file', { path: 'p.html', changeset_id: '00000000-0000-0000-0000-000000000000' })).isError).toBe(true);
     await c2.close();
+  });
+});
+
+describe('large files', () => {
+  it('read_file pages through big text files; edit_file changes part of them', async () => {
+    const big = `<html><head><title>Inicio</title></head><body>${'<p>relleno</p>'.repeat(4000)}<footer>Precio: $50.000</footer></body></html>`;
+    siteFs.put('grande.html', big);
+    const c = await mcpClient(await connect('publish'));
+
+    const p1 = await call(c, 'read_file', { path: 'grande.html' });
+    expect(p1.data.total_chars).toBe(big.length);
+    expect(p1.data.text.length).toBe(20_000);
+    expect(p1.data.next_offset).toBe(20_000);
+    const last = await call(c, 'read_file', { path: 'grande.html', offset: big.length - 100 });
+    expect(last.data.next_offset).toBeNull();
+    expect(last.data.text).toContain('$50.000');
+
+    const { data: draft } = await call(c, 'start_changeset');
+    const ambiguous = await call(c, 'edit_file', { changeset_id: draft.changeset_id, path: 'grande.html', edits: [{ old_text: '<p>relleno</p>', new_text: 'x' }] });
+    expect(ambiguous.isError).toBe(true);
+    expect(ambiguous.text).toContain('4000');
+    const stale = await call(c, 'edit_file', { changeset_id: draft.changeset_id, path: 'grande.html', base_hash: 'nope', edits: [{ old_text: 'Inicio', new_text: 'x' }] });
+    expect(stale.isError).toBe(true);
+
+    const ed = await call(c, 'edit_file', {
+      changeset_id: draft.changeset_id,
+      path: 'grande.html',
+      base_hash: p1.data.hash,
+      edits: [
+        { old_text: '<title>Inicio</title>', new_text: '<title>Lotes en Turrialba</title>' },
+        { old_text: '$50.000', new_text: '$45.000' },
+      ],
+    });
+    expect(ed.isError).toBe(false);
+    expect(siteFs.text('grande.html')).toContain('$50.000'); // live untouched until publish
+    const draftText = (await call(c, 'read_file', { path: 'grande.html', changeset_id: draft.changeset_id, offset: big.length - 100 })).data.text;
+    expect(draftText).toContain('$45.000');
+    await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+    await call(c, 'publish', { changeset_id: draft.changeset_id });
+    expect(siteFs.text('grande.html')).toContain('<title>Lotes en Turrialba</title>');
+    expect(siteFs.text('grande.html')).toContain('$45.000');
+    await c.close();
   });
 });

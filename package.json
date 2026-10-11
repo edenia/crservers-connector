@@ -5,13 +5,17 @@
   "description": "MCP connector that lets a CR Servers client's AI assistant safely publish to their site",
   "license": "MIT",
   "type": "module",
-  "engines": { "node": ">=22" },
+  "engines": {
+    "node": ">=22"
+  },
   "packageManager": "pnpm@10.33.4",
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "vitest run",
-    "dev": "tsx watch src/index.ts"
+    "dev": "tsx watch --env-file=.env src/index.ts",
+    "site:add": "tsx --env-file=.env scripts/site-add.ts",
+    "start": "node dist/index.js"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.30.1",

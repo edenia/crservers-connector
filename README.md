@@ -1,3 +1,7 @@
+<p align="center">
+  <a href="https://crservers.com"><img src="docs/assets/crservers-logo.svg" alt="CR Servers" width="280"></a>
+</p>
+
 # CR Servers · Conector de IA
 
 [![CI](https://github.com/edenia/crservers-connector/actions/workflows/ci.yml/badge.svg)](https://github.com/edenia/crservers-connector/actions/workflows/ci.yml)

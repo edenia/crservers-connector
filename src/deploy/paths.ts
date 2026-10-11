@@ -58,7 +58,7 @@ export function extOf(path: string): string {
 }
 
 /** Paths installed and owned by managed components (e.g. the contact form): readable, never writable by the AI. */
-export const COMPONENT_PATHS = ['contact.php', 'vendor/'];
+export const COMPONENT_PATHS = ['contact.php', 'vendor/', 'composer.json', 'composer.lock'];
 
 function isComponentPath(path: string): boolean {
   return COMPONENT_PATHS.some((p) => (p.endsWith('/') ? path.startsWith(p) : path === p));

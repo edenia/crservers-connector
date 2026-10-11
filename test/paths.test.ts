@@ -40,6 +40,7 @@ describe('assertWritable', () => {
     'contact.php',
     'vendor/autoload.php',
     'vendor/x/readme.md',
+    'composer.json',
   ])('blocks %s', (p) => {
     expect(() => assertWritable(p)).toThrow(PathError);
   });

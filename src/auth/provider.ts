@@ -10,6 +10,7 @@ import type { SiteRepo } from '../sites.js';
 import type { ClientAreaApi } from './clientarea.js';
 import type { PgClientsStore } from './clients.js';
 import { signReq } from './req.js';
+import { signInErrorPage } from '../ui/page.js';
 
 /**
  * OAuth 2.1 authorization server for the MCP endpoint (docs/ARCHITECTURE.md, "Sign-in" and "Tokens").
@@ -82,7 +83,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       [rid],
     )).rows[0];
     if (!ar || !binding || !safeEqual(Buffer.from(hashToken(binding)), Buffer.from(ar.binding_hash))) {
-      return void res.status(400).type('text/plain; charset=utf-8').send('La solicitud expiró o no es válida. Vuelva a su asistente de IA e inicie la conexión de nuevo.');
+      return void res.status(400).type('html').send(signInErrorPage());
     }
 
     const back = new URL(ar.redirect_uri);

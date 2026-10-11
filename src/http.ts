@@ -4,6 +4,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import type { ConnectorOAuthProvider } from './auth/provider.js';
 import { mcpHandler, mcpMethodNotAllowed } from './mcp/handler.js';
 import type { McpDeps } from './mcp/tools.js';
+import { landingPage } from './ui/page.js';
 
 export const SCOPES_SUPPORTED = ['site', 'offline_access'];
 
@@ -41,6 +42,10 @@ export function createApp(d: AppDeps): Express {
 
   app.get('/oauth/callback', (req, res, next) => {
     d.provider.clientAreaCallback(req, res).catch(next);
+  });
+
+  app.get('/', (_req, res) => {
+    res.type('html').send(landingPage(d.mcpUrl));
   });
 
   app.get('/healthz', (_req, res) => {

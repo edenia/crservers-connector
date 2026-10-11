@@ -193,6 +193,15 @@ describe('authorization code flow', () => {
     expect(tok.status).toBe(400);
   });
 
+  it('serves branded HTML for the landing page and sign-in errors', async () => {
+    const home = await get('/');
+    expect(home.headers.get('content-type')).toContain('text/html');
+    expect(await home.text()).toContain('Conector de IA de CR Servers');
+    const bad = await get('/oauth/callback?code=x&rid=nope');
+    expect(bad.status).toBe(400);
+    expect(await bad.text()).toContain('La solicitud expiró');
+  });
+
   it('the callback requires the browser that started the flow', async () => {
     const { payload } = await startAuthorize(await register());
     caResults.set('ca-x', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });

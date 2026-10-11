@@ -1,5 +1,5 @@
 /**
- * Path and file-type rules for everything the AI can touch (SPEC §5 "Scope", "File types").
+ * Path and file-type rules for everything the AI can touch (docs/ARCHITECTURE.md, "What the AI can and can't do").
  * All site paths are relative POSIX paths inside the web root, without a leading slash.
  */
 
@@ -57,7 +57,7 @@ export function extOf(path: string): string {
   return dot > 0 ? base.slice(dot + 1).toLowerCase() : '';
 }
 
-/** Paths installed and owned by managed components (P2/P3): readable, never writable by the AI. */
+/** Paths installed and owned by managed components (e.g. the contact form): readable, never writable by the AI. */
 export const COMPONENT_PATHS = ['contact.php', 'vendor/'];
 
 function isComponentPath(path: string): boolean {
@@ -87,7 +87,7 @@ export function assertWritable(path: string): void {
   }
 }
 
-/** Per-file size cap (SPEC §5 "Size / rate"). */
+/** Per-file size cap (docs/ARCHITECTURE.md, "Limits"). */
 export function maxFileBytes(path: string): number {
   return VIDEO_EXT.has(extOf(path)) ? 100 * MB : 25 * MB;
 }

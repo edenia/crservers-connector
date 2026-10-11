@@ -4,6 +4,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import type { ConnectorOAuthProvider } from './auth/provider.js';
 import { mcpHandler, mcpMethodNotAllowed } from './mcp/handler.js';
 import type { McpDeps } from './mcp/tools.js';
+import { landingPage } from './ui/page.js';
 
 export const SCOPES_SUPPORTED = ['site', 'offline_access'];
 
@@ -15,7 +16,7 @@ export interface AppDeps {
 }
 
 /**
- * HTTP surface: OAuth (SDK router + our metadata additions), the HostBill callback,
+ * HTTP surface: OAuth (SDK router + our metadata additions), the client-area callback,
  * health, and the MCP endpoint behind bearer auth.
  */
 export function createApp(d: AppDeps): Express {
@@ -39,8 +40,12 @@ export function createApp(d: AppDeps): Express {
 
   app.use(mcpAuthRouter({ provider: d.provider, issuerUrl, resourceServerUrl, scopesSupported: SCOPES_SUPPORTED, resourceName: 'CR Servers' }));
 
-  app.get('/oauth/hostbill/callback', (req, res, next) => {
-    d.provider.hostbillCallback(req, res).catch(next);
+  app.get('/oauth/callback', (req, res, next) => {
+    d.provider.clientAreaCallback(req, res).catch(next);
+  });
+
+  app.get('/', (_req, res) => {
+    res.type('html').send(landingPage(d.mcpUrl));
   });
 
   app.get('/healthz', (_req, res) => {

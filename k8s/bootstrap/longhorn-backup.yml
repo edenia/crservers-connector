@@ -1,0 +1,16 @@
+# Cluster admin, once. Daily Longhorn backup of the connector's volumes to the cluster's
+# backup target (NFS on the NAS). Volumes join by label:
+#   kubectl -n longhorn-system label volumes.longhorn.io <pv-name> recurring-job-group.longhorn.io/crservers-connector=enabled
+apiVersion: longhorn.io/v1beta2
+kind: RecurringJob
+metadata:
+  name: crservers-connector-backup
+  namespace: longhorn-system
+spec:
+  task: backup
+  cron: '30 3 * * *'
+  retain: 14
+  concurrency: 1
+  groups: [crservers-connector]
+  labels:
+    app: crservers-connector

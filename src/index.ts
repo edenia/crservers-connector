@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { PgClientsStore } from './auth/clients.js';
-import { HostbillClient } from './auth/hostbill.js';
+import { ClientAreaClient } from './auth/clientarea.js';
 import { ConnectorOAuthProvider } from './auth/provider.js';
 import { loadConfig } from './config.js';
 import { fromB64url } from './crypto.js';
@@ -17,19 +17,20 @@ const applied = await migrate(pool);
 if (applied.length) console.log(`migrations applied: ${applied.join(', ')}`);
 
 const sites = new SiteRepo(pool, fromB64url(cfg.ENCRYPTION_KEY));
+const clients = new PgClientsStore(pool, cfg.redirectAllowlist);
 const provider = new ConnectorOAuthProvider({
   pool,
-  clients: new PgClientsStore(pool, cfg.redirectAllowlist),
+  clients,
   sites,
-  hostbill: new HostbillClient(cfg.HOSTBILL_URL, cfg.HOSTBILL_API_ID, cfg.HOSTBILL_API_KEY),
+  clientArea: new ClientAreaClient(cfg.CLIENT_AREA_URL, cfg.CLIENT_AREA_API_ID, cfg.CLIENT_AREA_API_KEY),
   issuer: cfg.PUBLIC_URL,
   mcpUrl: cfg.mcpUrl,
-  hostbillUrl: cfg.HOSTBILL_URL,
+  clientAreaUrl: cfg.CLIENT_AREA_URL,
   reqKey: fromB64url(cfg.REQ_KEY),
 });
 
 const core = new DeployCore({ drafts: new PgDraftStore(pool), releases: new PgReleaseStore(pool), blobs: new PgBlobStore(pool) });
-const mcp = { core, sites, audit: new AuditLog(pool), openFs: async (siteId: string) => new FtpSiteFs(await sites.ftpConfig(siteId)) };
+const mcp = { core, sites, audit: new AuditLog(pool), openFs: async (siteId: string) => new FtpSiteFs(await sites.ftpConfig(siteId)), appName: (id: string) => clients.displayName(id) };
 
 const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp });
 const server = app.listen(cfg.PORT, () => console.log(`crservers-connector listening on :${cfg.PORT} (${cfg.PUBLIC_URL})`));

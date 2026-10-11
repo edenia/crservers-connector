@@ -7,14 +7,16 @@ import type { OAuthClientInformationFull, OAuthTokenRevocationRequest, OAuthToke
 import { InvalidGrantError, InvalidTargetError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { hashToken, randomToken, safeEqual } from '../crypto.js';
 import type { SiteRepo } from '../sites.js';
-import type { HostbillApi } from './hostbill.js';
+import type { ClientAreaApi } from './clientarea.js';
 import type { PgClientsStore } from './clients.js';
 import { signReq } from './req.js';
+import { signInErrorPage } from '../ui/page.js';
 
 /**
- * OAuth 2.1 authorization server for the MCP endpoint (SPEC §5 "Login"/"Tokens", §6 decision 2).
- * /authorize hands the browser to the HostBill plugin; /oauth/hostbill/callback comes back
- * with a one-time HostBill code, which we redeem server-to-server before issuing our own code.
+ * OAuth 2.1 authorization server for the MCP endpoint (docs/ARCHITECTURE.md, "Sign-in" and "Tokens").
+ * /authorize hands the browser to the CR Servers client area for sign-in and consent;
+ * /oauth/callback comes back with a one-time code, which we redeem server-to-server
+ * before issuing our own code.
  */
 
 export const BINDING_COOKIE = 'crs_bind';
@@ -27,10 +29,10 @@ export interface ProviderDeps {
   pool: Pool;
   clients: PgClientsStore;
   sites: SiteRepo;
-  hostbill: HostbillApi;
+  clientArea: ClientAreaApi;
   issuer: string;
   mcpUrl: string;
-  hostbillUrl: string;
+  clientAreaUrl: string;
   reqKey: Buffer;
 }
 
@@ -63,14 +65,14 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       app_host: appHost,
       exp: Math.floor(Date.now() / 1000) + REQUEST_TTL_S,
     });
-    // Ties the HostBill round trip to this browser, so a victim can't be sent a link that
+    // Ties the client-area round trip to this browser, so a victim can't be sent a link that
     // links their site to an attacker's AI client.
     res.cookie(BINDING_COOKIE, binding, { httpOnly: true, secure: true, sameSite: 'lax', path: '/oauth', maxAge: REQUEST_TTL_S * 1000 });
-    res.redirect(302, `${this.d.hostbillUrl}/index.php?cmd=crsconnect&req=${encodeURIComponent(req)}`);
+    res.redirect(302, `${this.d.clientAreaUrl}/index.php?cmd=crsconnect&req=${encodeURIComponent(req)}`);
   }
 
-  /** GET /oauth/hostbill/callback?code&rid  or  ?error=access_denied&rid */
-  async hostbillCallback(req: Request, res: Response): Promise<void> {
+  /** GET /oauth/callback?code&rid  or  ?error=access_denied&rid */
+  async clientAreaCallback(req: Request, res: Response): Promise<void> {
     const rid = typeof req.query.rid === 'string' ? req.query.rid : '';
     const binding = readCookie(req.headers.cookie, BINDING_COOKIE);
     res.clearCookie(BINDING_COOKIE, { path: '/oauth' });
@@ -81,7 +83,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       [rid],
     )).rows[0];
     if (!ar || !binding || !safeEqual(Buffer.from(hashToken(binding)), Buffer.from(ar.binding_hash))) {
-      return void res.status(400).type('text/plain; charset=utf-8').send('La solicitud expiró o no es válida. Vuelva a su asistente de IA e inicie la conexión de nuevo.');
+      return void res.status(400).type('html').send(signInErrorPage());
     }
 
     const back = new URL(ar.redirect_uri);
@@ -94,19 +96,19 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       return void res.redirect(302, back.href);
     }
 
-    const hb = await this.d.hostbill.exchange(req.query.code, rid).catch(() => null);
-    const site = hb && (await this.d.sites.byAccount(hb.account_id));
-    if (!hb || !site || site.status !== 'active') {
+    const ca = await this.d.clientArea.exchange(req.query.code, rid).catch(() => null);
+    const site = ca && (await this.d.sites.byAccount(ca.account_id));
+    if (!ca || !site || site.status !== 'active') {
       back.searchParams.set('error', 'access_denied');
-      back.searchParams.set('error_description', !hb ? 'sign-in could not be verified' : 'site not enabled for AI publishing yet');
+      back.searchParams.set('error_description', !ca ? 'sign-in could not be verified' : 'site not enabled for AI publishing yet');
       return void res.redirect(302, back.href);
     }
 
     const grantId = randomUUID();
     const scopes = ['site', ...((ar.scopes as string[]).includes('offline_access') ? ['offline_access'] : [])];
     await this.d.pool.query(
-      `INSERT INTO grants (id, client_id, hb_client_id, site_id, permission, scopes, resource) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [grantId, ar.client_id, hb.client_id, site.id, hb.scope, scopes, this.d.mcpUrl],
+      `INSERT INTO grants (id, client_id, account_holder_id, site_id, permission, scopes, resource) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [grantId, ar.client_id, ca.client_id, site.id, ca.scope, scopes, this.d.mcpUrl],
     );
     const code = randomToken(32);
     await this.d.pool.query(
@@ -157,7 +159,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     const r = (await this.d.pool.query(
-      `SELECT t.client_id, t.expires_at, g.id AS grant_id, g.site_id, g.permission, g.scopes, g.resource, g.hb_client_id
+      `SELECT t.client_id, t.expires_at, g.id AS grant_id, g.site_id, g.permission, g.scopes, g.resource, g.account_holder_id
        FROM tokens t JOIN grants g ON g.id = t.grant_id
        WHERE t.token_hash = $1 AND t.kind = 'access' AND t.revoked_at IS NULL AND g.revoked_at IS NULL AND t.expires_at > now()`,
       [hashToken(token)],
@@ -169,7 +171,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       scopes: r.scopes,
       expiresAt: Math.floor(new Date(r.expires_at).getTime() / 1000),
       resource: new URL(r.resource),
-      extra: { grantId: r.grant_id, siteId: r.site_id, permission: r.permission, hbClientId: r.hb_client_id },
+      extra: { grantId: r.grant_id, siteId: r.site_id, permission: r.permission, accountHolderId: r.account_holder_id },
     };
   }
 

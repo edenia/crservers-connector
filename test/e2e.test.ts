@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PgClientsStore } from '../src/auth/clients.js';
-import type { HostbillApi, HostbillGrant } from '../src/auth/hostbill.js';
+import type { ClientAreaApi, ClientAreaGrant } from '../src/auth/clientarea.js';
 import { ConnectorOAuthProvider } from '../src/auth/provider.js';
 import { verifyReq } from '../src/auth/req.js';
 import { migrate } from '../src/db/migrate.js';
@@ -18,11 +18,11 @@ import { SiteRepo } from '../src/sites.js';
 
 /**
  * Full authorization-code flow as an AI host drives it, against real Postgres and a fake
- * HostBill. Needs TEST_DATABASE_URL (CI provides one; locally: the crs-connector-pg container).
+ * client area. Needs TEST_DATABASE_URL (CI provides one; locally: the crs-connector-pg container).
  */
 const DB = process.env.TEST_DATABASE_URL ?? 'postgres://postgres:devonly@127.0.0.1:54329/connector';
 const CHATGPT = 'https://chatgpt.com/connector_platform_oauth_redirect';
-const HB_URL = 'https://hostbill.test';
+const CA_URL = 'https://clients.example.test';
 const reqKey = randomBytes(32);
 const schema = `t_${randomBytes(6).toString('hex')}`;
 
@@ -32,11 +32,11 @@ let base: string;
 /** What /.well-known/oauth-authorization-server says, and what iss must equal. */
 let issuer: string;
 let provider: ConnectorOAuthProvider;
-/** The pilot site's files (in memory; FTPS in production). */
+/** The test site's files (in memory; FTPS in production). */
 const siteFs = new MemorySiteFs({ 'index.html': '<h1>Lotes</h1><p>$50.000</p>', 'assets/a.css': 'a{}' });
 siteFs.close = async () => undefined;
-const hbResults = new Map<string, HostbillGrant | null>();
-const hostbill: HostbillApi = { exchange: async (code) => hbResults.get(code) ?? null };
+const caResults = new Map<string, ClientAreaGrant | null>();
+const clientArea: ClientAreaApi = { exchange: async (code) => caResults.get(code) ?? null };
 
 beforeAll(async () => {
   const admin = new pg.Pool({ connectionString: DB });
@@ -51,19 +51,20 @@ beforeAll(async () => {
   const mcpUrl = `${base}/mcp`;
   issuer = new URL(base).href;
   const sites = new SiteRepo(pool, randomBytes(32));
-  await sites.add({ hbAccountId: 15, domain: 'uat.example', ftpHost: 'iwx.test', ftpUser: 'crsconnect@uat.example', ftpPassword: 'pw' });
+  await sites.add({ serviceId: 15, domain: 'uat.example', ftpHost: 'iwx.test', ftpUser: 'crsconnect@uat.example', ftpPassword: 'pw' });
   provider = new ConnectorOAuthProvider({
     pool,
     clients: new PgClientsStore(pool, [CHATGPT]),
     sites,
-    hostbill,
+    clientArea,
     issuer: base,
     mcpUrl,
-    hostbillUrl: HB_URL,
+    clientAreaUrl: CA_URL,
     reqKey,
   });
   const core = new DeployCore({ drafts: new PgDraftStore(pool), releases: new PgReleaseStore(pool), blobs: new PgBlobStore(pool) });
-  const mcp = { core, sites, audit: new AuditLog(pool), openFs: async () => siteFs };
+  const clientsForNames = new PgClientsStore(pool, [CHATGPT]);
+  const mcp = { core, sites, audit: new AuditLog(pool), openFs: async () => siteFs, appName: (id: string) => clientsForNames.displayName(id) };
   server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp }));
 });
 
@@ -115,7 +116,7 @@ async function startAuthorize(clientId: string, scope = 'site offline_access') {
   const res = await get(`/authorize?${q}`);
   expect(res.status).toBe(302);
   const loc = new URL(res.headers.get('location')!);
-  expect(loc.origin + loc.pathname).toBe(`${HB_URL}/index.php`);
+  expect(loc.origin + loc.pathname).toBe(`${CA_URL}/index.php`);
   const req = loc.searchParams.get('req')!;
   const cookie = res.headers.get('set-cookie')!.split(';')[0]!;
   return { req, cookie, verifier, payload: verifyReq(reqKey, req)! };
@@ -140,18 +141,18 @@ describe('registration', () => {
 });
 
 describe('authorization code flow', () => {
-  it('signs a req the HostBill plugin can verify, naming the asking app', async () => {
+  it('signs a req the client-area extension can verify, naming the asking app', async () => {
     const { payload } = await startAuthorize(await register());
     expect(payload).toMatchObject({ app_name: 'ChatGPT', app_host: 'chatgpt.com' });
     expect(payload.rid).toMatch(/^[A-Za-z0-9_-]{32}$/);
   });
 
-  it('completes: HostBill code → our code (with iss) → tokens → site-scoped access', async () => {
+  it('completes: client-area code → our code (with iss) → tokens → site-scoped access', async () => {
     const clientId = await register();
     const { cookie, verifier, payload } = await startAuthorize(clientId);
-    hbResults.set('hb-good', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
+    caResults.set('ca-good', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
 
-    const cb = await get(`/oauth/hostbill/callback?code=hb-good&rid=${payload.rid}`, { cookie });
+    const cb = await get(`/oauth/callback?code=ca-good&rid=${payload.rid}`, { cookie });
     expect(cb.status).toBe(302);
     const back = new URL(cb.headers.get('location')!);
     expect(back.origin + back.pathname).toBe(CHATGPT);
@@ -186,27 +187,36 @@ describe('authorization code flow', () => {
   it('wrong PKCE verifier is refused', async () => {
     const clientId = await register();
     const { cookie, payload } = await startAuthorize(clientId);
-    hbResults.set('hb-pkce', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
-    const back = new URL((await get(`/oauth/hostbill/callback?code=hb-pkce&rid=${payload.rid}`, { cookie })).headers.get('location')!);
+    caResults.set('ca-pkce', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
+    const back = new URL((await get(`/oauth/callback?code=ca-pkce&rid=${payload.rid}`, { cookie })).headers.get('location')!);
     const tok = await form('/token', { grant_type: 'authorization_code', code: back.searchParams.get('code')!, code_verifier: pkce().verifier, client_id: clientId });
     expect(tok.status).toBe(400);
   });
 
+  it('serves branded HTML for the landing page and sign-in errors', async () => {
+    const home = await get('/');
+    expect(home.headers.get('content-type')).toContain('text/html');
+    expect(await home.text()).toContain('Conector de IA de CR Servers');
+    const bad = await get('/oauth/callback?code=x&rid=nope');
+    expect(bad.status).toBe(400);
+    expect(await bad.text()).toContain('La solicitud expiró');
+  });
+
   it('the callback requires the browser that started the flow', async () => {
     const { payload } = await startAuthorize(await register());
-    hbResults.set('hb-x', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
-    const res = await get(`/oauth/hostbill/callback?code=hb-x&rid=${payload.rid}`, { cookie: 'crs_bind=attacker' });
+    caResults.set('ca-x', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
+    const res = await get(`/oauth/callback?code=ca-x&rid=${payload.rid}`, { cookie: 'crs_bind=attacker' });
     expect(res.status).toBe(400);
   });
 
   it.each([
-    ['client cancels at HostBill', 'error=access_denied', undefined],
-    ['HostBill refuses the code', 'code=hb-unknown', undefined],
-    ['site not enabled yet', 'code=hb-nosite', { client_id: 12, account_id: 999, domain: 'other.example', server_id: '6', scope: 'publish' as const }],
-  ])('%s → access_denied back to the AI host', async (_name, query, hb) => {
+    ['client cancels in the client area', 'error=access_denied', undefined],
+    ['the client area refuses the code', 'code=ca-unknown', undefined],
+    ['site not enabled yet', 'code=ca-nosite', { client_id: 12, account_id: 999, domain: 'other.example', server_id: '6', scope: 'publish' as const }],
+  ])('%s → access_denied back to the AI host', async (_name, query, grant) => {
     const { cookie, payload } = await startAuthorize(await register());
-    if (hb) hbResults.set('hb-nosite', hb);
-    const res = await get(`/oauth/hostbill/callback?${query}&rid=${payload.rid}`, { cookie });
+    if (grant) caResults.set('ca-nosite', grant);
+    const res = await get(`/oauth/callback?${query}&rid=${payload.rid}`, { cookie });
     const back = new URL(res.headers.get('location')!);
     expect(back.searchParams.get('error')).toBe('access_denied');
     expect(back.searchParams.get('iss')).toBe(issuer);
@@ -222,13 +232,13 @@ describe('authorization code flow', () => {
   });
 });
 
-/** Runs the whole sign-in and returns an access token for the given HostBill permission. */
+/** Runs the whole sign-in and returns an access token for the given client-area permission. */
 async function connect(permission: 'publish' | 'preview'): Promise<string> {
   const clientId = await register();
   const { cookie, verifier, payload } = await startAuthorize(clientId);
-  const hbCode = `hb-${permission}-${payload.rid}`;
-  hbResults.set(hbCode, { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: permission });
-  const back = new URL((await get(`/oauth/hostbill/callback?code=${hbCode}&rid=${payload.rid}`, { cookie })).headers.get('location')!);
+  const caCode = `ca-${permission}-${payload.rid}`;
+  caResults.set(caCode, { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: permission });
+  const back = new URL((await get(`/oauth/callback?code=${caCode}&rid=${payload.rid}`, { cookie })).headers.get('location')!);
   const tok = await form('/token', { grant_type: 'authorization_code', code: back.searchParams.get('code')!, code_verifier: verifier, client_id: clientId });
   return ((await tok.json()) as { access_token: string }).access_token;
 }
@@ -251,7 +261,7 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     const { tools } = await c.listTools();
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
     expect(Object.keys(byName).sort()).toEqual(
-      ['delete_files', 'discard_changeset', 'get_activity_log', 'get_site_info', 'get_usage_limits', 'list_files', 'list_releases', 'list_sites', 'preview_changeset', 'publish', 'read_file', 'revert_release', 'start_changeset', 'write_files'].sort(),
+      ['delete_files', 'discard_changeset', 'edit_file', 'get_activity_log', 'get_site_info', 'get_usage_limits', 'list_files', 'list_releases', 'list_sites', 'preview_changeset', 'publish', 'read_file', 'revert_release', 'start_changeset', 'write_files'].sort(),
     );
     for (const t of tools) {
       expect(t.annotations, t.name).toMatchObject({ readOnlyHint: expect.any(Boolean), destructiveHint: expect.any(Boolean), openWorldHint: expect.any(Boolean) });
@@ -302,6 +312,7 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
 
     const log = await call(c, 'get_activity_log', { limit: 10 });
     expect(log.data.events.map((e: Structured) => e.action)).toEqual(['revert', 'publish', 'start_changeset']);
+    expect(new Set(log.data.events.map((e: Structured) => e.by_app))).toEqual(new Set(['ChatGPT']));
     await c.close();
   });
 
@@ -329,5 +340,47 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     expect(r.data.text).toBe('persisted');
     expect((await call(c2, 'read_file', { path: 'p.html', changeset_id: '00000000-0000-0000-0000-000000000000' })).isError).toBe(true);
     await c2.close();
+  });
+});
+
+describe('large files', () => {
+  it('read_file pages through big text files; edit_file changes part of them', async () => {
+    const big = `<html><head><title>Inicio</title></head><body>${'<p>relleno</p>'.repeat(4000)}<footer>Precio: $50.000</footer></body></html>`;
+    siteFs.put('grande.html', big);
+    const c = await mcpClient(await connect('publish'));
+
+    const p1 = await call(c, 'read_file', { path: 'grande.html' });
+    expect(p1.data.total_chars).toBe(big.length);
+    expect(p1.data.text.length).toBe(20_000);
+    expect(p1.data.next_offset).toBe(20_000);
+    const last = await call(c, 'read_file', { path: 'grande.html', offset: big.length - 100 });
+    expect(last.data.next_offset).toBeNull();
+    expect(last.data.text).toContain('$50.000');
+
+    const { data: draft } = await call(c, 'start_changeset');
+    const ambiguous = await call(c, 'edit_file', { changeset_id: draft.changeset_id, path: 'grande.html', edits: [{ old_text: '<p>relleno</p>', new_text: 'x' }] });
+    expect(ambiguous.isError).toBe(true);
+    expect(ambiguous.text).toContain('4000');
+    const stale = await call(c, 'edit_file', { changeset_id: draft.changeset_id, path: 'grande.html', base_hash: 'nope', edits: [{ old_text: 'Inicio', new_text: 'x' }] });
+    expect(stale.isError).toBe(true);
+
+    const ed = await call(c, 'edit_file', {
+      changeset_id: draft.changeset_id,
+      path: 'grande.html',
+      base_hash: p1.data.hash,
+      edits: [
+        { old_text: '<title>Inicio</title>', new_text: '<title>Lotes en Turrialba</title>' },
+        { old_text: '$50.000', new_text: '$45.000' },
+      ],
+    });
+    expect(ed.isError).toBe(false);
+    expect(siteFs.text('grande.html')).toContain('$50.000'); // live untouched until publish
+    const draftText = (await call(c, 'read_file', { path: 'grande.html', changeset_id: draft.changeset_id, offset: big.length - 100 })).data.text;
+    expect(draftText).toContain('$45.000');
+    await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+    await call(c, 'publish', { changeset_id: draft.changeset_id });
+    expect(siteFs.text('grande.html')).toContain('<title>Lotes en Turrialba</title>');
+    expect(siteFs.text('grande.html')).toContain('$45.000');
+    await c.close();
   });
 });

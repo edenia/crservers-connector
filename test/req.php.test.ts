@@ -5,7 +5,7 @@ import { signReq } from '../src/auth/req.js';
 
 /**
  * Cross-language check: a req signed here must verify with the same steps as
- * Crsconnect::verifyReq in edenia/hostbill-crsconnect (PHP). Skipped when php isn't installed.
+ * the client-area extension's PHP verifier. Skipped when php isn't installed.
  */
 const PHP = `
 $key = base64_decode(strtr($argv[1], '-_', '+/'), true);

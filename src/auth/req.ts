@@ -1,8 +1,8 @@
 import { b64url, fromB64url, hmac, randomToken, safeEqual } from '../crypto.js';
 
 /**
- * The signed `req` handed to the HostBill plugin (SPEC §5 "Login").
- * Format must match Crsconnect::verifyReq in edenia/hostbill-crsconnect:
+ * The signed `req` handed to the client-area extension (docs/ARCHITECTURE.md, "Sign-in").
+ * The extension verifies it with the same construction:
  *   b64url(json{rid, app_name, app_host, exp, nonce}) "." b64url(HMAC-SHA256(key, <payload part>))
  */
 export interface ReqPayload {

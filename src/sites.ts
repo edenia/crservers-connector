@@ -9,7 +9,7 @@ import type { FtpSiteConfig } from './deploy/ftpfs.js';
  */
 export interface Site {
   id: string;
-  hbAccountId: number;
+  serviceId: number;
   domain: string;
   status: 'active' | 'frozen';
 }
@@ -20,23 +20,23 @@ export class SiteRepo {
     private readonly encryptionKey: Buffer,
   ) {}
 
-  async byAccount(hbAccountId: number): Promise<Site | undefined> {
-    const r = await this.pool.query('SELECT id, hb_account_id, domain, status FROM sites WHERE hb_account_id = $1', [hbAccountId]);
+  async byAccount(serviceId: number): Promise<Site | undefined> {
+    const r = await this.pool.query('SELECT id, service_id, domain, status FROM sites WHERE service_id = $1', [serviceId]);
     return r.rows[0] && toSite(r.rows[0]);
   }
 
   async byId(id: string): Promise<Site | undefined> {
-    const r = await this.pool.query('SELECT id, hb_account_id, domain, status FROM sites WHERE id = $1', [id]);
+    const r = await this.pool.query('SELECT id, service_id, domain, status FROM sites WHERE id = $1', [id]);
     return r.rows[0] && toSite(r.rows[0]);
   }
 
-  async add(input: { hbAccountId: number; domain: string; ftpHost: string; ftpUser: string; ftpPassword: string }): Promise<Site> {
+  async add(input: { serviceId: number; domain: string; ftpHost: string; ftpUser: string; ftpPassword: string }): Promise<Site> {
     const id = randomUUID();
     await this.pool.query(
-      `INSERT INTO sites (id, hb_account_id, domain, ftp_host, ftp_user, ftp_password_enc) VALUES ($1, $2, $3, $4, $5, $6)`,
-      [id, input.hbAccountId, input.domain.toLowerCase(), input.ftpHost, input.ftpUser, seal(this.encryptionKey, input.ftpPassword)],
+      `INSERT INTO sites (id, service_id, domain, ftp_host, ftp_user, ftp_password_enc) VALUES ($1, $2, $3, $4, $5, $6)`,
+      [id, input.serviceId, input.domain.toLowerCase(), input.ftpHost, input.ftpUser, seal(this.encryptionKey, input.ftpPassword)],
     );
-    return { id, hbAccountId: input.hbAccountId, domain: input.domain.toLowerCase(), status: 'active' };
+    return { id, serviceId: input.serviceId, domain: input.domain.toLowerCase(), status: 'active' };
   }
 
   async ftpConfig(siteId: string): Promise<FtpSiteConfig> {
@@ -47,6 +47,6 @@ export class SiteRepo {
   }
 }
 
-function toSite(row: { id: string; hb_account_id: number; domain: string; status: Site['status'] }): Site {
-  return { id: row.id, hbAccountId: row.hb_account_id, domain: row.domain, status: row.status };
+function toSite(row: { id: string; service_id: number; domain: string; status: Site['status'] }): Site {
+  return { id: row.id, serviceId: row.service_id, domain: row.domain, status: row.status };
 }

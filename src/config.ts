@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-/** Redirect URIs the authorization server accepts (SPEC §5 "Tokens"). Exact match. */
+/** Redirect URIs the authorization server accepts (docs/ARCHITECTURE.md, "Tokens"). Exact match. */
 export const DEFAULT_REDIRECT_ALLOWLIST = [
   'https://claude.ai/api/mcp/auth_callback',
   'https://claude.com/api/mcp/auth_callback',
@@ -16,11 +16,11 @@ const schema = z.object({
   /** Public origin of this service, e.g. https://connect.crservers.com. Also the OAuth issuer. */
   PUBLIC_URL: z.url().transform((u) => u.replace(/\/+$/, '')),
   DATABASE_URL: z.string().min(1),
-  /** HostBill client-area origin, e.g. https://clients.crservers.com (dev: https://hostbill.crservers.net). */
-  HOSTBILL_URL: z.url().transform((u) => u.replace(/\/+$/, '')),
-  HOSTBILL_API_ID: z.string().min(1),
-  HOSTBILL_API_KEY: z.string().min(1),
-  /** HMAC key for `req`, shared with the HostBill plugin (its ReqKeyCurrent). */
+  /** CR Servers client area origin, e.g. https://clients.crservers.com. */
+  CLIENT_AREA_URL: z.url().transform((u) => u.replace(/\/+$/, '')),
+  CLIENT_AREA_API_ID: z.string().min(1),
+  CLIENT_AREA_API_KEY: z.string().min(1),
+  /** HMAC key for `req`, shared with the client-area extension. */
   REQ_KEY: b64urlKey,
   /** AES-256-GCM key for secrets at rest (site FTP passwords). */
   ENCRYPTION_KEY: b64urlKey,

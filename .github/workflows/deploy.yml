@@ -27,7 +27,7 @@ jobs:
       IMAGE: ghcr.io/${{ github.repository }}:${{ github.ref_name }}
       VERSION: ${{ github.ref_name }}
       INGRESS_HOST: ${{ vars.INGRESS_HOST }}
-      HOSTBILL_URL: ${{ vars.HOSTBILL_URL }}
+      CLIENT_AREA_URL: ${{ vars.CLIENT_AREA_URL }}
       EXTRA_REDIRECT_URIS: ${{ vars.EXTRA_REDIRECT_URIS }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -72,8 +72,8 @@ jobs:
       - name: Apply secrets
         env:
           POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
-          HOSTBILL_API_ID: ${{ secrets.HOSTBILL_API_ID }}
-          HOSTBILL_API_KEY: ${{ secrets.HOSTBILL_API_KEY }}
+          CLIENT_AREA_API_ID: ${{ secrets.CLIENT_AREA_API_ID }}
+          CLIENT_AREA_API_KEY: ${{ secrets.CLIENT_AREA_API_KEY }}
           REQ_KEY: ${{ secrets.REQ_KEY }}
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
         run: |
@@ -83,8 +83,8 @@ jobs:
             --dry-run=client -o yaml | kubectl apply -n "$NAMESPACE" -f -
           kubectl -n "$NAMESPACE" create secret generic connector-secrets \
             --from-literal=DATABASE_URL="postgres://connector:${POSTGRES_PASSWORD}@postgres.${NAMESPACE}.svc:5432/connector" \
-            --from-literal=HOSTBILL_API_ID="$HOSTBILL_API_ID" \
-            --from-literal=HOSTBILL_API_KEY="$HOSTBILL_API_KEY" \
+            --from-literal=CLIENT_AREA_API_ID="$CLIENT_AREA_API_ID" \
+            --from-literal=CLIENT_AREA_API_KEY="$CLIENT_AREA_API_KEY" \
             --from-literal=REQ_KEY="$REQ_KEY" \
             --from-literal=ENCRYPTION_KEY="$ENCRYPTION_KEY" \
             --dry-run=client -o yaml | kubectl apply -n "$NAMESPACE" -f -
@@ -92,9 +92,9 @@ jobs:
       - name: Render and apply manifests
         run: |
           set -euo pipefail
-          test -n "$INGRESS_HOST" && test -n "$HOSTBILL_URL"
+          test -n "$INGRESS_HOST" && test -n "$CLIENT_AREA_URL"
           mkdir -p build_k8s
-          for f in k8s/*.yml; do envsubst '${IMAGE} ${VERSION} ${INGRESS_HOST} ${HOSTBILL_URL} ${EXTRA_REDIRECT_URIS}' < "$f" > "build_k8s/$(basename "$f")"; done
+          for f in k8s/*.yml; do envsubst '${IMAGE} ${VERSION} ${INGRESS_HOST} ${CLIENT_AREA_URL} ${EXTRA_REDIRECT_URIS}' < "$f" > "build_k8s/$(basename "$f")"; done
           kubectl apply -n "$NAMESPACE" -f build_k8s/postgres.yml
           kubectl -n "$NAMESPACE" rollout status statefulset/connector-postgres --timeout=300s
           kubectl apply -n "$NAMESPACE" -f build_k8s/app.yml -f build_k8s/ingress.yml -f build_k8s/backup.yml

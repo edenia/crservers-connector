@@ -4,7 +4,7 @@ import type { AddressInfo } from 'node:net';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PgClientsStore } from '../src/auth/clients.js';
-import type { HostbillApi, HostbillGrant } from '../src/auth/hostbill.js';
+import type { ClientAreaApi, ClientAreaGrant } from '../src/auth/clientarea.js';
 import { ConnectorOAuthProvider } from '../src/auth/provider.js';
 import { verifyReq } from '../src/auth/req.js';
 import { migrate } from '../src/db/migrate.js';
@@ -18,11 +18,11 @@ import { SiteRepo } from '../src/sites.js';
 
 /**
  * Full authorization-code flow as an AI host drives it, against real Postgres and a fake
- * HostBill. Needs TEST_DATABASE_URL (CI provides one; locally: the crs-connector-pg container).
+ * client area. Needs TEST_DATABASE_URL (CI provides one; locally: the crs-connector-pg container).
  */
 const DB = process.env.TEST_DATABASE_URL ?? 'postgres://postgres:devonly@127.0.0.1:54329/connector';
 const CHATGPT = 'https://chatgpt.com/connector_platform_oauth_redirect';
-const HB_URL = 'https://hostbill.test';
+const CA_URL = 'https://clients.example.test';
 const reqKey = randomBytes(32);
 const schema = `t_${randomBytes(6).toString('hex')}`;
 
@@ -32,11 +32,11 @@ let base: string;
 /** What /.well-known/oauth-authorization-server says, and what iss must equal. */
 let issuer: string;
 let provider: ConnectorOAuthProvider;
-/** The pilot site's files (in memory; FTPS in production). */
+/** The test site's files (in memory; FTPS in production). */
 const siteFs = new MemorySiteFs({ 'index.html': '<h1>Lotes</h1><p>$50.000</p>', 'assets/a.css': 'a{}' });
 siteFs.close = async () => undefined;
-const hbResults = new Map<string, HostbillGrant | null>();
-const hostbill: HostbillApi = { exchange: async (code) => hbResults.get(code) ?? null };
+const caResults = new Map<string, ClientAreaGrant | null>();
+const clientArea: ClientAreaApi = { exchange: async (code) => caResults.get(code) ?? null };
 
 beforeAll(async () => {
   const admin = new pg.Pool({ connectionString: DB });
@@ -51,15 +51,15 @@ beforeAll(async () => {
   const mcpUrl = `${base}/mcp`;
   issuer = new URL(base).href;
   const sites = new SiteRepo(pool, randomBytes(32));
-  await sites.add({ hbAccountId: 15, domain: 'uat.example', ftpHost: 'iwx.test', ftpUser: 'crsconnect@uat.example', ftpPassword: 'pw' });
+  await sites.add({ serviceId: 15, domain: 'uat.example', ftpHost: 'iwx.test', ftpUser: 'crsconnect@uat.example', ftpPassword: 'pw' });
   provider = new ConnectorOAuthProvider({
     pool,
     clients: new PgClientsStore(pool, [CHATGPT]),
     sites,
-    hostbill,
+    clientArea,
     issuer: base,
     mcpUrl,
-    hostbillUrl: HB_URL,
+    clientAreaUrl: CA_URL,
     reqKey,
   });
   const core = new DeployCore({ drafts: new PgDraftStore(pool), releases: new PgReleaseStore(pool), blobs: new PgBlobStore(pool) });
@@ -116,7 +116,7 @@ async function startAuthorize(clientId: string, scope = 'site offline_access') {
   const res = await get(`/authorize?${q}`);
   expect(res.status).toBe(302);
   const loc = new URL(res.headers.get('location')!);
-  expect(loc.origin + loc.pathname).toBe(`${HB_URL}/index.php`);
+  expect(loc.origin + loc.pathname).toBe(`${CA_URL}/index.php`);
   const req = loc.searchParams.get('req')!;
   const cookie = res.headers.get('set-cookie')!.split(';')[0]!;
   return { req, cookie, verifier, payload: verifyReq(reqKey, req)! };
@@ -141,18 +141,18 @@ describe('registration', () => {
 });
 
 describe('authorization code flow', () => {
-  it('signs a req the HostBill plugin can verify, naming the asking app', async () => {
+  it('signs a req the client-area extension can verify, naming the asking app', async () => {
     const { payload } = await startAuthorize(await register());
     expect(payload).toMatchObject({ app_name: 'ChatGPT', app_host: 'chatgpt.com' });
     expect(payload.rid).toMatch(/^[A-Za-z0-9_-]{32}$/);
   });
 
-  it('completes: HostBill code → our code (with iss) → tokens → site-scoped access', async () => {
+  it('completes: client-area code → our code (with iss) → tokens → site-scoped access', async () => {
     const clientId = await register();
     const { cookie, verifier, payload } = await startAuthorize(clientId);
-    hbResults.set('hb-good', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
+    caResults.set('ca-good', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
 
-    const cb = await get(`/oauth/hostbill/callback?code=hb-good&rid=${payload.rid}`, { cookie });
+    const cb = await get(`/oauth/callback?code=ca-good&rid=${payload.rid}`, { cookie });
     expect(cb.status).toBe(302);
     const back = new URL(cb.headers.get('location')!);
     expect(back.origin + back.pathname).toBe(CHATGPT);
@@ -187,27 +187,27 @@ describe('authorization code flow', () => {
   it('wrong PKCE verifier is refused', async () => {
     const clientId = await register();
     const { cookie, payload } = await startAuthorize(clientId);
-    hbResults.set('hb-pkce', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
-    const back = new URL((await get(`/oauth/hostbill/callback?code=hb-pkce&rid=${payload.rid}`, { cookie })).headers.get('location')!);
+    caResults.set('ca-pkce', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
+    const back = new URL((await get(`/oauth/callback?code=ca-pkce&rid=${payload.rid}`, { cookie })).headers.get('location')!);
     const tok = await form('/token', { grant_type: 'authorization_code', code: back.searchParams.get('code')!, code_verifier: pkce().verifier, client_id: clientId });
     expect(tok.status).toBe(400);
   });
 
   it('the callback requires the browser that started the flow', async () => {
     const { payload } = await startAuthorize(await register());
-    hbResults.set('hb-x', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
-    const res = await get(`/oauth/hostbill/callback?code=hb-x&rid=${payload.rid}`, { cookie: 'crs_bind=attacker' });
+    caResults.set('ca-x', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
+    const res = await get(`/oauth/callback?code=ca-x&rid=${payload.rid}`, { cookie: 'crs_bind=attacker' });
     expect(res.status).toBe(400);
   });
 
   it.each([
-    ['client cancels at HostBill', 'error=access_denied', undefined],
-    ['HostBill refuses the code', 'code=hb-unknown', undefined],
-    ['site not enabled yet', 'code=hb-nosite', { client_id: 12, account_id: 999, domain: 'other.example', server_id: '6', scope: 'publish' as const }],
-  ])('%s → access_denied back to the AI host', async (_name, query, hb) => {
+    ['client cancels in the client area', 'error=access_denied', undefined],
+    ['the client area refuses the code', 'code=ca-unknown', undefined],
+    ['site not enabled yet', 'code=ca-nosite', { client_id: 12, account_id: 999, domain: 'other.example', server_id: '6', scope: 'publish' as const }],
+  ])('%s → access_denied back to the AI host', async (_name, query, grant) => {
     const { cookie, payload } = await startAuthorize(await register());
-    if (hb) hbResults.set('hb-nosite', hb);
-    const res = await get(`/oauth/hostbill/callback?${query}&rid=${payload.rid}`, { cookie });
+    if (grant) caResults.set('ca-nosite', grant);
+    const res = await get(`/oauth/callback?${query}&rid=${payload.rid}`, { cookie });
     const back = new URL(res.headers.get('location')!);
     expect(back.searchParams.get('error')).toBe('access_denied');
     expect(back.searchParams.get('iss')).toBe(issuer);
@@ -223,13 +223,13 @@ describe('authorization code flow', () => {
   });
 });
 
-/** Runs the whole sign-in and returns an access token for the given HostBill permission. */
+/** Runs the whole sign-in and returns an access token for the given client-area permission. */
 async function connect(permission: 'publish' | 'preview'): Promise<string> {
   const clientId = await register();
   const { cookie, verifier, payload } = await startAuthorize(clientId);
-  const hbCode = `hb-${permission}-${payload.rid}`;
-  hbResults.set(hbCode, { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: permission });
-  const back = new URL((await get(`/oauth/hostbill/callback?code=${hbCode}&rid=${payload.rid}`, { cookie })).headers.get('location')!);
+  const caCode = `ca-${permission}-${payload.rid}`;
+  caResults.set(caCode, { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: permission });
+  const back = new URL((await get(`/oauth/callback?code=${caCode}&rid=${payload.rid}`, { cookie })).headers.get('location')!);
   const tok = await form('/token', { grant_type: 'authorization_code', code: back.searchParams.get('code')!, code_verifier: verifier, client_id: clientId });
   return ((await tok.json()) as { access_token: string }).access_token;
 }

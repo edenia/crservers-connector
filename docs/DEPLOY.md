@@ -1,84 +1,70 @@
-# Deploying the connector
+# Deploying
 
-Runs on the Edenia k3s cluster (Traefik + Longhorn), namespace `crservers-connector`, at `https://connect.crservers.com`. Same model as crservers.com: a `v*` tag builds the image to GHCR and applies `k8s/`.
+The connector ships as a container image and plain Kubernetes manifests (`k8s/`). This page covers the moving parts. Environment-specific values live in the deployment environment, not in this repository.
 
-## What runs
+## What gets deployed
 
 | Object | Notes |
 |---|---|
-| `Deployment/connector` | 1 replica, `Recreate` (the per-site publish lock is in-process until it moves to Postgres). Non-root, read-only root filesystem, no capabilities. Probes on `/healthz`. |
-| `StatefulSet/connector-postgres` | Postgres 17, 10 Gi on `crservers-connector-storage` (Longhorn, 2 replicas). Holds OAuth state, drafts, releases and revert records. |
-| `IngressRoute`s | HTTP → HTTPS redirect; TLS from the cluster's `myresolver` (Let's Encrypt). |
-| Secrets | `connector-postgres`, `connector-secrets`, created by the workflow from GitHub environment secrets. Never in the repo or a ConfigMap. |
+| `Deployment/connector` | One replica, `Recreate` strategy (the per-site publish lock is in-process for now). Non-root, read-only root filesystem, no capabilities. Probes on `/healthz`. |
+| `StatefulSet/connector-postgres` | Postgres 17 with a persistent volume. Holds connections, drafts, releases and undo records. |
+| `CronJob/connector-pg-dump` | Daily `pg_dump`, verified with `pg_restore -l`, kept 7 days. |
+| `IngressRoute`s | Traefik: HTTP → HTTPS, TLS via the cluster's ACME resolver. |
+| Secrets | `connector-postgres`, `connector-secrets`, created by the deploy workflow from the deployment environment. Never committed and never in a ConfigMap. |
 
-## One-time bootstrap (cluster admin)
+`k8s/bootstrap/` holds the one-time, cluster-admin pieces:
+- the namespace;
+- a deploy ServiceAccount limited to that namespace;
+- the storage class;
+- a recurring volume backup job.
 
-1. **Namespace, deploy identity and storage class:**
-   ```bash
-   kubectl --context edenia-prod apply -f k8s/bootstrap/deployer-rbac.yml -f k8s/bootstrap/storageclass.yml
-   ```
-   CI gets a ServiceAccount that can only touch `crservers-connector` (no cluster-wide rights).
+## Configuration
 
-2. **Kubeconfig for CI** from that ServiceAccount's token. Paste it as base64 into the `KUBE_CONFIG_DATA` secret below. Never reuse an admin kubeconfig: this repo is public.
+| Name | Kind | Purpose |
+|---|---|---|
+| `INGRESS_HOST` | variable | Public host name; `PUBLIC_URL` is `https://<host>` |
+| `CLIENT_AREA_URL` | variable | CR Servers client area origin |
+| `EXTRA_REDIRECT_URIS` | variable | Optional extra exact OAuth redirect URIs |
+| `KUBE_CONFIG_DATA` | secret | Base64 kubeconfig for the namespace-scoped deploy account |
+| `POSTGRES_PASSWORD` | secret | Database password |
+| `CLIENT_AREA_API_ID`, `CLIENT_AREA_API_KEY` | secret | Server-to-server key for redeeming sign-in codes (IP-restricted, least privilege) |
+| `REQ_KEY` | secret | 32 random bytes, base64url. Shared with the client-area extension to sign sign-in requests. |
+| `ENCRYPTION_KEY` | secret | 32 random bytes, base64url. Encrypts stored FTP credentials. |
 
-3. **GitHub environment `production`** (Settings → Environments), with required reviewers.
+Generate a key:
 
-   | Kind | Name | Value |
-   |---|---|---|
-   | secret | `KUBE_CONFIG_DATA` | base64 kubeconfig from step 2 |
-   | secret | `POSTGRES_PASSWORD` | random |
-   | secret | `REQ_KEY` | 32 random bytes, base64url. **Same value** as the HostBill plugin's `ReqKeyCurrent` |
-   | secret | `ENCRYPTION_KEY` | 32 random bytes, base64url. Losing it makes stored FTP passwords unreadable |
-   | secret | `HOSTBILL_API_ID`, `HOSTBILL_API_KEY` | key limited to the `module` method, IP-locked to the cluster's egress |
-   | variable | `INGRESS_HOST` | `connect.crservers.com` |
-   | variable | `HOSTBILL_URL` | `https://hostbill.crservers.net` during the pilot (dev HostBill); `https://clients.crservers.com` for production |
-   | variable | `EXTRA_REDIRECT_URIS` | optional, comma-separated |
-
-4. **DNS:** `connect.crservers.com A 200.122.181.15` (the cluster ingress, same as crservers.com) in the `crservers.com` zone on ns1–3.crservers.net.
-
-5. **Image visibility:** if the first rollout can't pull the image, make the GHCR package `crservers-connector` public (the repo is public; the image holds no secrets).
+```bash
+node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
+```
 
 ## Release
 
 ```bash
-git tag v0.1.0 && git push origin v0.1.0
+git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-The workflow tests, builds, applies the secrets, rolls out Postgres and then the app, and smoke-tests `/healthz`.
+The workflow then:
+1. Runs the tests.
+2. Builds the image.
+3. Waits for approval on the `production` environment.
+4. Applies the secrets and rolls out Postgres, then the app.
+5. Checks `/healthz`.
 
-## Registering a pilot site
+## Registering a site
 
-The deploy FTP user is created by hand in SiteWorx (spike 0c). Then:
+Sites are registered once a deploy FTP user, jailed to the site's web root, exists on the hosting server. The FTP password is read from stdin:
 
 ```bash
-kubectl --context edenia-prod -n crservers-connector exec -i deploy/connector -- \
-  node dist/cli/site-add.js --account <hostbill account id> --domain <domain> \
-  --ftp-host <node>.crservers.com --ftp-user <user>@<domain> < password-file
+kubectl -n crservers-connector exec -i deploy/connector -- \
+  node dist/cli/site-add.js --account <service id> --domain <domain> \
+  --ftp-host <server host name> --ftp-user <user> < password-file
 ```
 
-## Backups
+## Backups and restore
 
-Two layers. Both were tested on 2026-10-11, including a restore drill.
+**Logical dumps** (`connector-dumps` volume). Restore one into a scratch database:
+1. Restore it with `pg_restore --no-owner`.
+2. Compare row counts with the live database.
+3. Then restore for real.
 
-| Layer | What | When | Kept | Where |
-|---|---|---|---|---|
-| Logical | `CronJob/connector-pg-dump`: `pg_dump -Fc`, checked with `pg_restore -l`; the job fails if the dump is unreadable | 03:15 Costa Rica | 7 days | `PVC/connector-dumps` |
-| Block | Longhorn `RecurringJob/crservers-connector-backup` (`k8s/bootstrap/longhorn-backup.yml`) for both volumes (Postgres data and dumps) | 03:30 | 14 | the cluster backup target (NFS on the NAS) |
-
-New volumes join the Longhorn job by label, applied by an admin:
-
-```bash
-kubectl --context edenia-prod -n longhorn-system label volumes.longhorn.io <pv-name> recurring-job-group.longhorn.io/crservers-connector=enabled
-```
-
-**Restore from a dump:**
-1. Run a one-off Job with the Postgres image, the dumps volume mounted read-only, and `PG*` env from `connector-postgres`.
-2. `pg_restore -d <db> --no-owner /dumps/connector-<date>.dump`.
-
-Drill first into a scratch database: create `restore_drill`, restore, compare row counts with the live database, drop it.
-
-**Restore a whole volume:** from the Longhorn UI, restore the backup to a new volume, then point the StatefulSet's PVC at it.
-
-## Known gaps
-
-- **Single replica:** move the publish lock to a Postgres advisory lock before scaling out.
+**Volume backups** come from the recurring job in `k8s/bootstrap/`. New volumes join it by label.

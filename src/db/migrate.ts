@@ -24,7 +24,7 @@ const MIGRATIONS: { id: string; sql: string }[] = [
         refreshed_at timestamptz NOT NULL DEFAULT now()
       );
 
-      -- One row per /authorize: waits for the HostBill round trip.
+      -- One row per /authorize: waits for the client-area round trip.
       CREATE TABLE auth_requests (
         rid            text PRIMARY KEY,
         client_id      text NOT NULL REFERENCES oauth_clients(client_id),
@@ -38,7 +38,7 @@ const MIGRATIONS: { id: string; sql: string }[] = [
         used_at        timestamptz
       );
 
-      -- A connection: one AI client authorized for one site by one HostBill client.
+      -- A connection: one AI client authorized for one site by one client-area account.
       CREATE TABLE grants (
         id            uuid PRIMARY KEY,
         client_id     text NOT NULL REFERENCES oauth_clients(client_id),
@@ -112,7 +112,7 @@ const MIGRATIONS: { id: string; sql: string }[] = [
         UNIQUE (site_id, number)
       );
 
-      -- Revert-record content (pilot: in Postgres; an S3-compatible bucket later).
+      -- Revert-record content (in Postgres for now; an S3-compatible bucket later).
       CREATE TABLE blobs (
         key   text PRIMARY KEY,
         data  bytea NOT NULL
@@ -127,6 +127,15 @@ const MIGRATIONS: { id: string; sql: string }[] = [
         detail     jsonb NOT NULL DEFAULT '{}'
       );
       CREATE INDEX audit_site_at ON audit_log (site_id, at DESC);
+    `,
+  },
+  {
+    // Neutral names for client-area identifiers (001 is already applied in production; never edit it).
+    id: '003_neutral_client_area_columns',
+    sql: `
+      ALTER TABLE sites RENAME COLUMN hb_account_id TO service_id;
+      ALTER TABLE grants RENAME COLUMN hb_client_id TO account_holder_id;
+      ALTER INDEX grants_hb_client RENAME TO grants_account_holder;
     `,
   },
 ];

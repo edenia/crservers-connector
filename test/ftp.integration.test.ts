@@ -9,7 +9,7 @@ import { FtpSiteFs } from '../src/deploy/ftpfs.js';
 import { MemoryBlobStore, MemoryDraftStore, MemoryReleaseStore } from '../src/deploy/stores.js';
 
 /**
- * Real FTP round trip against a local ftp-srv (plain FTP; TLS is covered by spike 0c on a
+ * Real FTP round trip against a local ftp-srv (plain FTP; TLS is verified separately on a
  * live node). Exercises the exact operations the deploy core uses.
  */
 let root: string;

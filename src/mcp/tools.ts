@@ -9,7 +9,7 @@ import type { SiteFs } from '../deploy/sitefs.js';
 import type { Site, SiteRepo } from '../sites.js';
 
 /**
- * MCP tool surface (SPEC §4, v0.5). Every tool is scoped to the one site the token was
+ * MCP tool surface (docs/ARCHITECTURE.md, "Tools"). Every tool is scoped to the one site the token was
  * granted for. Annotations are explicit on every tool.
  */
 

@@ -3,8 +3,8 @@ import { Client, FileType, type FileInfo } from 'basic-ftp';
 import { baseOf, dirOf, type SiteEntry, type SiteFs } from './sitefs.js';
 
 /**
- * SiteFs over FTP(S) to a deploy user jailed to the site's web root (SPEC §6, decision 3;
- * spike 0c). The jail root "/" is the web root, so site paths map to "/<path>".
+ * SiteFs over FTP(S) to a deploy user jailed to the site's web root.
+ * The jail root "/" is the web root, so site paths map to "/<path>".
  *
  * Production: explicit TLS to the node hostname with certificate verification
  * (ProFTPd serves one node-wide certificate, so connect by node hostname, not the domain).

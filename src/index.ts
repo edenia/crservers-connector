@@ -1,6 +1,6 @@
 import pg from 'pg';
 import { PgClientsStore } from './auth/clients.js';
-import { HostbillClient } from './auth/hostbill.js';
+import { ClientAreaClient } from './auth/clientarea.js';
 import { ConnectorOAuthProvider } from './auth/provider.js';
 import { loadConfig } from './config.js';
 import { fromB64url } from './crypto.js';
@@ -22,10 +22,10 @@ const provider = new ConnectorOAuthProvider({
   pool,
   clients,
   sites,
-  hostbill: new HostbillClient(cfg.HOSTBILL_URL, cfg.HOSTBILL_API_ID, cfg.HOSTBILL_API_KEY),
+  clientArea: new ClientAreaClient(cfg.CLIENT_AREA_URL, cfg.CLIENT_AREA_API_ID, cfg.CLIENT_AREA_API_KEY),
   issuer: cfg.PUBLIC_URL,
   mcpUrl: cfg.mcpUrl,
-  hostbillUrl: cfg.HOSTBILL_URL,
+  clientAreaUrl: cfg.CLIENT_AREA_URL,
   reqKey: fromB64url(cfg.REQ_KEY),
 });
 

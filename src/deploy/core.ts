@@ -4,7 +4,7 @@ import { baseOf, dirOf, type SiteEntry, type SiteFs } from './sitefs.js';
 import type { BlobStore, Draft, DraftStore, Release, ReleaseFile, ReleaseStore } from './stores.js';
 
 /**
- * Deploy core (SPEC §4–§6): drafts, preview gate, conflict check, revert records,
+ * Deploy core (docs/ARCHITECTURE.md, "Publishing"): drafts, preview gate, conflict check, revert records,
  * two-phase publish with rollback, and revert. Transport-agnostic: callers pass the
  * site's SiteFs.
  */
@@ -35,7 +35,7 @@ export interface DeployCoreOptions {
   drafts: DraftStore;
   releases: ReleaseStore;
   blobs: BlobStore;
-  /** Releases kept with revert records per site (P1: 5). */
+  /** Releases kept with revert records per site (default 5). */
   keepReleases?: number;
   draftTtlMs?: number;
   maxDraftBytes?: number;
@@ -139,7 +139,7 @@ export class DeployCore {
     await this.drafts.delete(draftId);
   }
 
-  /** Records the base of a path the first time the draft touches it (P4). */
+  /** Records the base of a path the first time the draft touches it (conflict check). */
   private async touch(d: Draft, fs: SiteFs, path: string, baseHash?: string): Promise<void> {
     if (d.base.has(path)) return;
     const st = await fs.stat(path);
@@ -408,7 +408,7 @@ export class DeployCore {
     for (const f of files) if (f.beforeBlob) await this.blobs.delete(f.beforeBlob).catch(() => undefined);
   }
 
-  /** One publish or revert at a time per site (P4). Single-process lock; Postgres advisory lock later. */
+  /** One publish or revert at a time per site. Single-process lock; Postgres advisory lock later. */
   private async withSiteLock<T>(siteId: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.siteLocks.get(siteId) ?? Promise.resolve();
     const run = prev.catch(() => undefined).then(fn);

@@ -473,13 +473,15 @@ describe('preview links', () => {
 });
 
 describe('approval link', () => {
-  it('flags many files, deletions, the home page, and "approve every publish"', () => {
-    const none = { added: ['a.html'], modified: ['b/index.html'], deleted: [] as string[] };
-    expect(approvalReasons(none, { approveEveryPublish: false })).toEqual([]);
-    expect(approvalReasons(none, { approveEveryPublish: true })).toEqual(['always']);
-    expect(approvalReasons({ added: Array.from({ length: 20 }, (_, i) => `p${i}.html`), modified: [], deleted: [] }, { approveEveryPublish: false })).toEqual(['many_files']);
-    expect(approvalReasons({ added: [], modified: ['index.html'], deleted: ['old.png'] }, { approveEveryPublish: false })).toEqual(['deletes', 'home_page']);
+  it('is opt-in only: big changes alone never need it', () => {
+    const big = { added: Array.from({ length: 30 }, (_, i) => `p${i}.html`), modified: ['index.html'], deleted: ['old.png'] };
+    expect(approvalReasons(big, { approveEveryPublish: false })).toEqual([]);
+    expect(approvalReasons({ added: ['a.html'], modified: [], deleted: [] }, { approveEveryPublish: true })).toEqual(['always']);
   });
+
+  const setOptIn = (on: boolean) => pool.query('UPDATE sites SET approve_every_publish = $1 WHERE service_id = 15', [on]);
+  beforeAll(() => setOptIn(true));
+  afterAll(() => setOptIn(false));
 
   const cookiesOf = (res: globalThis.Response) => res.headers.getSetCookie().map((c) => c.split(';')[0]!);
 
@@ -514,7 +516,7 @@ describe('approval link', () => {
 
     const pub = await call(c, 'publish', { changeset_id: id });
     expect(pub.isError).toBe(false);
-    expect(pub.data).toMatchObject({ needs_approval: true, reasons: ['home_page'] });
+    expect(pub.data).toMatchObject({ needs_approval: true, reasons: ['always'] });
     expect(pub.data.approval_url).toMatch(new RegExp(`^${base}/approve/[0-9a-f-]{36}$`));
     expect(siteFs.text('index.html')).toBe(before);
     expect((await call(c, 'publish', { changeset_id: id })).data.approval_url).toBe(pub.data.approval_url); // same pending request
@@ -527,14 +529,17 @@ describe('approval link', () => {
     const html = await pageRes.text();
     expect(html).toContain('Aprobar publicación');
     expect(html).toContain('<code>index.html</code>');
-    expect(html).toContain('Cambia la página de inicio.');
+    expect(html).toContain('Usted pidió aprobar cada publicación.');
+    expect(html).toContain('src="/assets/crservers-logo.svg"');
     expect(html).toMatch(/href="http:\/\/localhost:\d+\/p\/[A-Za-z0-9_-]{32}\/"/);
 
     const post = (headers: Record<string, string>) =>
       fetch(`${base}${path}`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers }, body: 'decision=approve' });
     expect((await post({ cookie: session!, origin: 'https://evil.example' })).status).toBe(403);
     expect((await post({ origin: base })).status).toBe(403); // no session
-    const ok = await post({ cookie: session!, origin: base });
+    expect((await post({ cookie: session!, origin: 'null' })).status).toBe(403); // opaque origin, no fetch metadata
+    // Browsers may send "Origin: null" on form posts; Sec-Fetch-Site still says it's our own page.
+    const ok = await post({ cookie: session!, origin: 'null', 'sec-fetch-site': 'same-origin' });
     expect(ok.status).toBe(303);
     expect(siteFs.text('index.html')).toBe('<h1>Inicio nuevo</h1>');
     expect(await (await get(path, { cookie: session! })).text()).toContain('Publicado');
@@ -593,5 +598,25 @@ describe('approval link', () => {
     expect(again.text).toContain('decidió no publicar');
     expect(siteFs.text('index.html')).toBe(before);
     await c.close();
+  });
+});
+
+describe('without the opt-in', () => {
+  it('a home page change publishes straight from the chat', async () => {
+    const c = await mcpClient(await connect('publish'));
+    const { data: draft } = await call(c, 'start_changeset');
+    await call(c, 'write_files', { changeset_id: draft.changeset_id, files: [{ path: 'index.html', content: '<h1>directo</h1>' }] });
+    await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+    const pub = await call(c, 'publish', { changeset_id: draft.changeset_id });
+    expect(pub.data.needs_approval).toBeUndefined();
+    expect(siteFs.text('index.html')).toBe('<h1>directo</h1>');
+    await call(c, 'revert_release', { release: pub.data.release });
+    await c.close();
+  });
+
+  it('serves its own logo', async () => {
+    const res = await get('/assets/crservers-logo.svg');
+    expect(res.headers.get('content-type')).toContain('image/svg+xml');
+    expect(await res.text()).toMatch(/^<svg /);
   });
 });

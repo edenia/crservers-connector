@@ -3,7 +3,8 @@
  * Colors, radii and shadows come from the CR Servers design tokens v1.0.0-gate1.
  */
 
-const LOGO = 'https://crservers.com/images/CRServers-logo.png';
+/** Served by this app (src/ui/logo.ts): browsers' tracker blocking can drop cross-site images. */
+export const LOGO_PATH = '/assets/crservers-logo.svg';
 
 export type Lang = 'es' | 'en';
 
@@ -73,8 +74,8 @@ export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', 
 export function page(opts: { title: string; body: string; state?: 'ok' | 'info'; lang?: Lang }): string {
   const lang = opts.lang ?? 'es';
   const badge = opts.state ? `<div class="state${opts.state === 'ok' ? ' ok' : ''}" aria-hidden="true">${opts.state === 'ok' ? '✓' : '!'}</div>` : '';
-  return `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><meta name="referrer" content="no-referrer"><title>${esc(opts.title)} | CR Servers</title><style>${CSS}</style></head>
-<body><main class="wrap"><header class="brand"><img src="${LOGO}" alt="CR Servers" height="36"></header>
+  return `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><meta name="referrer" content="same-origin"><title>${esc(opts.title)} | CR Servers</title><style>${CSS}</style></head>
+<body><main class="wrap"><header class="brand"><img src="${LOGO_PATH}" alt="CR Servers" width="168" height="36"></header>
 <section class="card">${badge}<h1>${esc(opts.title)}</h1>${opts.body}</section>
 <footer class="foot muted small">CR Servers · <a href="${T[lang].helpUrl}">${T[lang].help}</a></footer></main></body></html>`;
 }

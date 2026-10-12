@@ -57,13 +57,9 @@ The server's instructions tell the AI to:
 - links to the site's own pages are rewritten to stay inside the preview;
 - a banner marks it as an unpublished draft, and nothing is indexed, cached or logged with its token.
 
-**Approval link.** Some changes need the site owner's approval in the browser, not just a "yes" in the chat:
-- 20 files or more;
-- any deletion;
-- a change to the home page (`index.html`);
-- every change, when the client turned on *Aprobar cada publicación* (off by default; support turns it on for now).
+**Approval link (opt-in).** A client can turn on *Aprobar cada publicación* (off by default; support turns it on for now). Then every change needs their approval in the browser, not just a "yes" in the chat. Without it, the chat confirmation, the preview link and one-step undo are the guards: size-based rules (20+ files, deletions, the home page) were tried and dropped as more friction than safety.
 
-For these, `publish` doesn't go live. It returns an approval link for the AI to give the user. Opening it sends the browser through the client area with a signed *approve* request. The client area checks that the signed-in client owns the site and returns a one-time code, which only works for approving (it can never become a connection). The page then shows the files, the reasons and a fresh preview link, with *Publicar* and *No publicar* buttons. It publishes only if the draft is still exactly the version the AI asked about. Otherwise nothing is published and the AI has to ask again. A rejection is final for that draft version. The approval session is a cookie scoped to that one link, sent only on same-site requests, and the origin of the form post is checked as well.
+When it's on, `publish` doesn't go live. It returns an approval link for the AI to give the user. Opening it sends the browser through the client area with a signed *approve* request. The client area checks that the signed-in client owns the site and returns a one-time code, which only works for approving (it can never become a connection). The page then shows the files, the reasons and a fresh preview link, with *Publicar* and *No publicar* buttons. It publishes only if the draft is still exactly the version the AI asked about. Otherwise nothing is published and the AI has to ask again. A rejection is final for that draft version. The approval session is a cookie scoped to that one link, sent only on same-site requests, and the origin of the form post is checked as well.
 
 **Conflict check.** If a touched file changed on the live site since the draft was based on it, preview reports it and publish refuses. Only one publish or revert runs at a time per site.
 

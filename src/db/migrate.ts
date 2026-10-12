@@ -138,6 +138,20 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       ALTER INDEX grants_hb_client RENAME TO grants_account_holder;
     `,
   },
+  {
+    // Private, short-lived links that show a draft as the site would look (src/preview/preview.ts).
+    id: '004_preview_links',
+    sql: `
+      CREATE TABLE preview_links (
+        token_hash  text PRIMARY KEY,
+        draft_id    uuid NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+        site_id     uuid NOT NULL REFERENCES sites(id),
+        created_at  timestamptz NOT NULL DEFAULT now(),
+        expires_at  timestamptz NOT NULL
+      );
+      CREATE INDEX preview_links_draft ON preview_links (draft_id);
+    `,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

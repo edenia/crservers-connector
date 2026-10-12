@@ -4,7 +4,45 @@
  */
 
 const LOGO = 'https://crservers.com/images/CRServers-logo.png';
-const HELP = 'https://crservers.com/es/contacto';
+
+export type Lang = 'es' | 'en';
+
+const T = {
+  es: {
+    help: '¿Necesita ayuda?',
+    helpUrl: 'https://crservers.com/es/contacto',
+    landingTitle: 'Conector de IA de CR Servers',
+    landingBody: 'Permite que su asistente de IA (Claude, ChatGPT) actualice su sitio web en CR Servers, con vista previa antes de publicar y la posibilidad de deshacer cada cambio.',
+    address: 'Dirección del conector:',
+    how: 'Cómo funciona',
+    expiredTitle: 'La solicitud expiró',
+    expiredBody: 'Vuelva a su asistente de IA e inicie la conexión de nuevo.',
+  },
+  en: {
+    help: 'Need help?',
+    helpUrl: 'https://crservers.com/contact',
+    landingTitle: 'CR Servers AI connector',
+    landingBody: 'Lets your AI assistant (Claude, ChatGPT) update your CR Servers website, with a preview before publishing and one-step undo for every change.',
+    address: 'Connector address:',
+    how: 'How it works',
+    expiredTitle: 'This request expired',
+    expiredBody: 'Go back to your AI assistant and start the connection again.',
+  },
+} as const;
+
+/** Spanish unless the browser prefers English over Spanish. */
+export function pickLang(acceptLanguage: string | undefined): Lang {
+  const prefs = (acceptLanguage ?? '')
+    .split(',')
+    .map((part) => {
+      const [tag, ...params] = part.trim().toLowerCase().split(';');
+      const q = Number(params.find((x) => x.trim().startsWith('q='))?.split('=')[1] ?? '1');
+      return { lang: (tag ?? '').split('-')[0], q: Number.isFinite(q) ? q : 0 };
+    })
+    .filter((p) => p.lang === 'es' || p.lang === 'en')
+    .sort((a, b) => b.q - a.q);
+  return prefs[0]?.lang === 'en' ? 'en' : 'es';
+}
 
 const CSS = `
 :root{--strong:#101828;--muted:#707070;--page:#F7F9FC;--card:#FFFFFF;--interface:#006EBF;--c1:#009DD4;--c2:#005C9F;--c1h:#0080ad;--r-control:10px;--r-card:16px;--sh-card:6px 6px 14px 0px #35405226;--sh-btn:1px 4px 4px rgba(0,0,0,.15)}
@@ -26,25 +64,23 @@ h1{font-size:1.375rem;line-height:1.3;font-weight:700;margin:0 0 8px}
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
-export function page(opts: { title: string; body: string; state?: 'ok' | 'info' }): string {
+export function page(opts: { title: string; body: string; state?: 'ok' | 'info'; lang?: Lang }): string {
+  const lang = opts.lang ?? 'es';
   const badge = opts.state ? `<div class="state${opts.state === 'ok' ? ' ok' : ''}" aria-hidden="true">${opts.state === 'ok' ? '✓' : '!'}</div>` : '';
-  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><meta name="referrer" content="no-referrer"><title>${esc(opts.title)} | CR Servers</title><style>${CSS}</style></head>
+  return `<!doctype html><html lang="${lang}"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="robots" content="noindex"><meta name="referrer" content="no-referrer"><title>${esc(opts.title)} | CR Servers</title><style>${CSS}</style></head>
 <body><main class="wrap"><header class="brand"><img src="${LOGO}" alt="CR Servers" height="36"></header>
 <section class="card">${badge}<h1>${esc(opts.title)}</h1>${opts.body}</section>
-<footer class="foot muted small">CR Servers · <a href="${HELP}">¿Necesita ayuda?</a></footer></main></body></html>`;
+<footer class="foot muted small">CR Servers · <a href="${T[lang].helpUrl}">${T[lang].help}</a></footer></main></body></html>`;
 }
 
-export const landingPage = (mcpUrl: string) =>
+export const landingPage = (mcpUrl: string, lang: Lang = 'es') =>
   page({
-    title: 'Conector de IA de CR Servers',
-    body: `<p>Permite que su asistente de IA (Claude, ChatGPT) actualice su sitio web en CR Servers, con vista previa antes de publicar y la posibilidad de deshacer cada cambio.</p>
-<p class="muted small">Dirección del conector: <code>${esc(mcpUrl)}</code></p>
-<p><a class="btn" href="https://github.com/edenia/crservers-connector#readme">Cómo funciona</a></p>`,
+    lang,
+    title: T[lang].landingTitle,
+    body: `<p>${T[lang].landingBody}</p>
+<p class="muted small">${T[lang].address} <code>${esc(mcpUrl)}</code></p>
+<p><a class="btn" href="https://github.com/edenia/crservers-connector#readme">${T[lang].how}</a></p>`,
   });
 
-export const signInErrorPage = () =>
-  page({
-    title: 'La solicitud expiró',
-    state: 'info',
-    body: '<p>Vuelva a su asistente de IA e inicie la conexión de nuevo.</p>',
-  });
+export const signInErrorPage = (lang: Lang = 'es') =>
+  page({ lang, title: T[lang].expiredTitle, state: 'info', body: `<p>${T[lang].expiredBody}</p>` });

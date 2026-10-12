@@ -152,6 +152,41 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       CREATE INDEX preview_links_draft ON preview_links (draft_id);
     `,
   },
+  {
+    // Approval link for big changes (src/approvals/approvals.ts). No FK to drafts: the row
+    // outlives the draft so the AI can learn the outcome after the owner publishes.
+    id: '005_approvals',
+    sql: `
+      ALTER TABLE sites ADD COLUMN approve_every_publish boolean NOT NULL DEFAULT false;
+
+      CREATE TABLE approvals (
+        id                 uuid PRIMARY KEY,
+        site_id            uuid NOT NULL REFERENCES sites(id),
+        draft_id           uuid NOT NULL,
+        draft_version      integer NOT NULL,
+        client_id          text NOT NULL,
+        reasons            text[] NOT NULL,
+        summary            jsonb NOT NULL,
+        status             text NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'approved', 'rejected')),
+        release_number     integer,
+        session_hash       text,
+        session_expires_at timestamptz,
+        created_at         timestamptz NOT NULL DEFAULT now(),
+        expires_at         timestamptz NOT NULL,
+        decided_at         timestamptz
+      );
+      CREATE INDEX approvals_draft ON approvals (draft_id, draft_version);
+
+      -- One row per client-area round trip to verify the owner.
+      CREATE TABLE approval_signins (
+        rid          text PRIMARY KEY,
+        approval_id  uuid NOT NULL REFERENCES approvals(id) ON DELETE CASCADE,
+        binding_hash text NOT NULL,
+        expires_at   timestamptz NOT NULL,
+        used_at      timestamptz
+      );
+    `,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

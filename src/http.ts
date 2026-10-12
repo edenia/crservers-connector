@@ -5,6 +5,7 @@ import type { ConnectorOAuthProvider } from './auth/provider.js';
 import { mcpHandler, mcpMethodNotAllowed } from './mcp/handler.js';
 import type { McpDeps } from './mcp/tools.js';
 import type { PreviewService } from './preview/preview.js';
+import type { ApprovalService } from './approvals/approvals.js';
 import { landingPage, pickLang } from './ui/page.js';
 
 export const SCOPES_SUPPORTED = ['site', 'offline_access'];
@@ -15,6 +16,7 @@ export interface AppDeps {
   mcpUrl: string;
   mcp: McpDeps;
   preview: PreviewService;
+  approvals: ApprovalService;
 }
 
 /**
@@ -80,8 +82,16 @@ export function createApp(d: AppDeps): Express {
 
   app.use(mcpAuthRouter({ provider: d.provider, issuerUrl, resourceServerUrl, scopesSupported: SCOPES_SUPPORTED, resourceName: 'CR Servers' }));
 
+  // One callback for both client-area round trips: new connections and approval sign-ins.
   app.get('/oauth/callback', (req, res, next) => {
-    d.provider.clientAreaCallback(req, res).catch(next);
+    (async () => ((await d.approvals.ownsRid(req.query.rid)) ? d.approvals.callback(req, res) : d.provider.clientAreaCallback(req, res)))().catch(next);
+  });
+
+  app.get('/approve/:id', (req, res, next) => {
+    d.approvals.show(req, res).catch(next);
+  });
+  app.post('/approve/:id', express.urlencoded({ extended: false, limit: '4kb' }), (req, res, next) => {
+    d.approvals.decide(req, res).catch(next);
   });
 
   app.get('/', (_req, res) => {

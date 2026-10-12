@@ -255,6 +255,15 @@ export class DeployCore {
     return { conflicts: [...conflicts].sort(), live };
   }
 
+  /** What a draft changes, without side effects (approval rules look at this before publishing). */
+  async summary(draftId: string, siteId: string): Promise<{ added: string[]; modified: string[]; deleted: string[]; version: number; previewed: boolean; expiresAt: Date }> {
+    const d = await this.getDraft(draftId, siteId);
+    const added: string[] = [];
+    const modified: string[] = [];
+    for (const p of d.writes.keys()) (d.base.get(p) === null ? added : modified).push(p);
+    return { added: added.sort(), modified: modified.sort(), deleted: [...d.deletes].sort(), version: d.version, previewed: d.previewedVersion === d.version, expiresAt: d.expiresAt };
+  }
+
   /** Marks the current draft version as previewed. Scans and the preview site are added by callers. */
   async preview(draftId: string, siteId: string, fs: SiteFs): Promise<PreviewSummary> {
     const d = await this.getDraft(draftId, siteId);
@@ -267,9 +276,11 @@ export class DeployCore {
     return { added: added.sort(), modified: modified.sort(), deleted: [...d.deletes].sort(), conflicts };
   }
 
-  async publish(draftId: string, siteId: string, fs: SiteFs, byApp: string): Promise<Release> {
+  /** `expectedVersion`: refuse unless the draft is still exactly that version (approval link). */
+  async publish(draftId: string, siteId: string, fs: SiteFs, byApp: string, expectedVersion?: number): Promise<Release> {
     return this.withSiteLock(siteId, async () => {
       const d = await this.getDraft(draftId, siteId);
+      if (expectedVersion !== undefined && d.version !== expectedVersion) throw new DeployError('not_previewed', 'The draft changed after approval was requested');
       if (d.writes.size === 0 && d.deletes.size === 0) throw new DeployError('invalid', 'Nothing to publish');
       if (d.previewedVersion !== d.version) throw new DeployError('not_previewed', 'Preview the draft in its current form before publishing');
       const { conflicts, live } = await this.conflicts(d, fs);

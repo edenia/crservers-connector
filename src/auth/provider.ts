@@ -98,7 +98,8 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
 
     const ca = await this.d.clientArea.exchange(req.query.code, rid).catch(() => null);
     const site = ca && (await this.d.sites.byAccount(ca.account_id));
-    if (!ca || !site || site.status !== 'active') {
+    // Codes issued for approving a publish never become connections.
+    if (!ca || ca.scope === 'approve' || !site || site.status !== 'active') {
       back.searchParams.set('error', 'access_denied');
       back.searchParams.set('error_description', !ca ? 'sign-in could not be verified' : 'site not enabled for AI publishing yet');
       return void res.redirect(302, back.href);
@@ -108,7 +109,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     const scopes = ['site', ...((ar.scopes as string[]).includes('offline_access') ? ['offline_access'] : [])];
     await this.d.pool.query(
       `INSERT INTO grants (id, client_id, account_holder_id, site_id, permission, scopes, resource) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [grantId, ar.client_id, ca.client_id, site.id, ca.scope, scopes, this.d.mcpUrl],
+      [grantId, ar.client_id, ca.client_id, site.id, ca.scope as 'preview' | 'publish', scopes, this.d.mcpUrl],
     );
     const code = randomToken(32);
     await this.d.pool.query(

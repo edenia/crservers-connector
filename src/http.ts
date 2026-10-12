@@ -33,7 +33,8 @@ export function createApp(d: AppDeps): Express {
         JSON.stringify({
           t: new Date().toISOString(),
           m: req.method,
-          p: req.path,
+          // originalUrl keeps the mount path (req.path is relative inside the SDK's routers); drop the query.
+          p: req.originalUrl.split('?')[0],
           s: res.statusCode,
           ms: Number((process.hrtime.bigint() - start) / 1_000_000n),
           ua: (req.get('user-agent') ?? '').slice(0, 80),

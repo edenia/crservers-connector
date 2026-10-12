@@ -8,7 +8,8 @@ export interface ClientAreaGrant {
   account_id: number;
   domain: string;
   server_id: string;
-  scope: 'preview' | 'publish';
+  /** preview / publish: a new connection. approve: the site owner signed in to approve one publish. */
+  scope: 'preview' | 'publish' | 'approve';
 }
 
 export interface ClientAreaApi {
@@ -35,7 +36,7 @@ export class ClientAreaClient implements ClientAreaApi {
     const j = (await res.json()) as Record<string, unknown>;
     // Failures carry no detail; any non-success means "start over".
     if (j.success !== true) return null;
-    const scope = j.scope === 'preview' ? 'preview' : j.scope === 'publish' ? 'publish' : null;
+    const scope = j.scope === 'preview' || j.scope === 'publish' || j.scope === 'approve' ? j.scope : null;
     if (typeof j.client_id !== 'number' || typeof j.account_id !== 'number' || typeof j.domain !== 'string' || !scope) {
       throw new Error('Unexpected client area exchange response');
     }

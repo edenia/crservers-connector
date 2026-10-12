@@ -12,6 +12,8 @@ export interface Site {
   serviceId: number;
   domain: string;
   status: 'active' | 'frozen';
+  /** The client asked to approve every publish in the browser ("Aprobar cada publicación"). */
+  approveEveryPublish: boolean;
 }
 
 export class SiteRepo {
@@ -21,12 +23,12 @@ export class SiteRepo {
   ) {}
 
   async byAccount(serviceId: number): Promise<Site | undefined> {
-    const r = await this.pool.query('SELECT id, service_id, domain, status FROM sites WHERE service_id = $1', [serviceId]);
+    const r = await this.pool.query('SELECT id, service_id, domain, status, approve_every_publish FROM sites WHERE service_id = $1', [serviceId]);
     return r.rows[0] && toSite(r.rows[0]);
   }
 
   async byId(id: string): Promise<Site | undefined> {
-    const r = await this.pool.query('SELECT id, service_id, domain, status FROM sites WHERE id = $1', [id]);
+    const r = await this.pool.query('SELECT id, service_id, domain, status, approve_every_publish FROM sites WHERE id = $1', [id]);
     return r.rows[0] && toSite(r.rows[0]);
   }
 
@@ -36,7 +38,7 @@ export class SiteRepo {
       `INSERT INTO sites (id, service_id, domain, ftp_host, ftp_user, ftp_password_enc) VALUES ($1, $2, $3, $4, $5, $6)`,
       [id, input.serviceId, input.domain.toLowerCase(), input.ftpHost, input.ftpUser, seal(this.encryptionKey, input.ftpPassword)],
     );
-    return { id, serviceId: input.serviceId, domain: input.domain.toLowerCase(), status: 'active' };
+    return { id, serviceId: input.serviceId, domain: input.domain.toLowerCase(), status: 'active', approveEveryPublish: false };
   }
 
   async ftpConfig(siteId: string): Promise<FtpSiteConfig> {
@@ -47,6 +49,6 @@ export class SiteRepo {
   }
 }
 
-function toSite(row: { id: string; service_id: number; domain: string; status: Site['status'] }): Site {
-  return { id: row.id, serviceId: row.service_id, domain: row.domain, status: row.status };
+function toSite(row: { id: string; service_id: number; domain: string; status: Site['status']; approve_every_publish: boolean }): Site {
+  return { id: row.id, serviceId: row.service_id, domain: row.domain, status: row.status, approveEveryPublish: row.approve_every_publish };
 }

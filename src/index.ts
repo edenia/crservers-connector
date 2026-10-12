@@ -10,6 +10,7 @@ import { FtpSiteFs } from './deploy/ftpfs.js';
 import { AuditLog, PgBlobStore, PgDraftStore, PgReleaseStore } from './deploy/pgstores.js';
 import { createApp } from './http.js';
 import { PreviewService } from './preview/preview.js';
+import { ApprovalService } from './approvals/approvals.js';
 import { SiteRepo } from './sites.js';
 
 const cfg = loadConfig();
@@ -19,11 +20,12 @@ if (applied.length) console.log(`migrations applied: ${applied.join(', ')}`);
 
 const sites = new SiteRepo(pool, fromB64url(cfg.ENCRYPTION_KEY));
 const clients = new PgClientsStore(pool, cfg.redirectAllowlist);
+const clientArea = new ClientAreaClient(cfg.CLIENT_AREA_URL, cfg.CLIENT_AREA_API_ID, cfg.CLIENT_AREA_API_KEY);
 const provider = new ConnectorOAuthProvider({
   pool,
   clients,
   sites,
-  clientArea: new ClientAreaClient(cfg.CLIENT_AREA_URL, cfg.CLIENT_AREA_API_ID, cfg.CLIENT_AREA_API_KEY),
+  clientArea,
   issuer: cfg.PUBLIC_URL,
   mcpUrl: cfg.mcpUrl,
   clientAreaUrl: cfg.CLIENT_AREA_URL,
@@ -32,9 +34,16 @@ const provider = new ConnectorOAuthProvider({
 
 const core = new DeployCore({ drafts: new PgDraftStore(pool), releases: new PgReleaseStore(pool), blobs: new PgBlobStore(pool) });
 const preview = new PreviewService(pool, sites, cfg.PUBLIC_URL);
-const mcp = { core, sites, preview, audit: new AuditLog(pool), openFs: async (siteId: string) => new FtpSiteFs(await sites.ftpConfig(siteId)), appName: (id: string) => clients.displayName(id) };
+const audit = new AuditLog(pool);
+const openFs = async (siteId: string) => new FtpSiteFs(await sites.ftpConfig(siteId));
+const appName = (id: string) => clients.displayName(id);
+const approvals = new ApprovalService({
+  pool, sites, core, audit, openFs, preview, clientArea, appName,
+  clientAreaUrl: cfg.CLIENT_AREA_URL, reqKey: fromB64url(cfg.REQ_KEY), publicUrl: cfg.PUBLIC_URL,
+});
+const mcp = { core, sites, preview, approvals, audit, openFs, appName };
 
-const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp, preview });
+const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp, preview, approvals });
 const server = app.listen(cfg.PORT, () => console.log(`crservers-connector listening on :${cfg.PORT} (${cfg.PUBLIC_URL})`));
 
 for (const sig of ['SIGTERM', 'SIGINT'] as const) {

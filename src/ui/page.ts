@@ -60,9 +60,15 @@ h1{font-size:1.375rem;line-height:1.3;font-weight:700;margin:0 0 8px}
 .btn{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 20px;border-radius:var(--r-control);font-weight:700;text-decoration:none;color:#fff;border:1px solid var(--c2);background:linear-gradient(90deg,var(--c1),var(--c2));box-shadow:var(--sh-btn)}
 .btn:hover{background:linear-gradient(90deg,var(--c1h),var(--c2))}
 .foot{text-align:center;margin-top:20px}
+h2{font-size:1rem;margin:16px 0 4px}
+ul.files{margin:0;padding-left:20px;font-size:.875rem;overflow-wrap:anywhere}
+.actions{display:flex;gap:12px;flex-wrap:wrap;margin:20px 0 8px}
+button.btn{font:inherit;font-weight:700;cursor:pointer}
+.btn.secondary{background:#fff;color:var(--interface);border-color:var(--interface);box-shadow:none}
+.btn.secondary:hover{background:var(--page)}
 `;
 
-const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
+export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
 
 export function page(opts: { title: string; body: string; state?: 'ok' | 'info'; lang?: Lang }): string {
   const lang = opts.lang ?? 'es';

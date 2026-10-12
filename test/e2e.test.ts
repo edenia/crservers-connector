@@ -13,6 +13,7 @@ import { AuditLog, PgBlobStore, PgDraftStore, PgReleaseStore } from '../src/depl
 import { MemorySiteFs } from '../src/deploy/sitefs.js';
 import { createApp } from '../src/http.js';
 import { PreviewService } from '../src/preview/preview.js';
+import { ApprovalService, approvalReasons } from '../src/approvals/approvals.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SiteRepo } from '../src/sites.js';
@@ -34,7 +35,7 @@ let base: string;
 let issuer: string;
 let provider: ConnectorOAuthProvider;
 /** The test site's files (in memory; FTPS in production). */
-const siteFs = new MemorySiteFs({ 'index.html': '<h1>Lotes</h1><p>$50.000</p>', 'assets/a.css': 'a{}' });
+const siteFs = new MemorySiteFs({ 'index.html': '<h1>Inicio</h1>', 'lotes.html': '<h1>Lotes</h1><p>$50.000</p>', 'assets/a.css': 'a{}' });
 siteFs.close = async () => undefined;
 const caResults = new Map<string, ClientAreaGrant | null>();
 const liveFetches: string[] = [];
@@ -78,8 +79,11 @@ beforeAll(async () => {
     return new Response(new Uint8Array(f.data), { status: 200, headers: { 'content-type': type } });
   };
   const preview = new PreviewService(pool, sites, base, fetchLive);
-  const mcp = { core, sites, preview, audit: new AuditLog(pool), openFs: async () => siteFs, appName: (id: string) => clientsForNames.displayName(id) };
-  server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview }));
+  const audit = new AuditLog(pool);
+  const appName = (id: string) => clientsForNames.displayName(id);
+  const approvals = new ApprovalService({ pool, sites, core, audit, openFs: async () => siteFs, preview, clientArea, clientAreaUrl: CA_URL, reqKey, publicUrl: base, appName });
+  const mcp = { core, sites, preview, approvals, audit, openFs: async () => siteFs, appName };
+  server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals }));
 });
 
 afterAll(async () => {
@@ -295,32 +299,32 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
 
   it('draft → write → (publish refused without preview) → preview → publish → revert', async () => {
     const c = await mcpClient(await connect('publish'));
-    const read = await call(c, 'read_file', { path: 'index.html' });
+    const read = await call(c, 'read_file', { path: 'lotes.html' });
     expect(read.data.text).toContain('$50.000');
 
     const { data: draft } = await call(c, 'start_changeset', { note: 'precio lote' });
     const w = await call(c, 'write_files', {
       changeset_id: draft.changeset_id,
       files: [
-        { path: 'index.html', content: '<h1>Lotes</h1><p>$45.000</p>', base_hash: read.data.hash },
+        { path: 'lotes.html', content: '<h1>Lotes</h1><p>$45.000</p>', base_hash: read.data.hash },
         { path: 'img/lote.png', content: Buffer.from([137, 80, 78, 71]).toString('base64'), encoding: 'base64' },
         { path: 'admin.php', content: '<?php system($_GET[1]);' },
       ],
     });
     expect(w.data.results.map((r: Structured) => r.ok)).toEqual([true, true, false]);
-    expect(siteFs.text('index.html')).toContain('$50.000');
+    expect(siteFs.text('lotes.html')).toContain('$50.000');
 
     const early = await call(c, 'publish', { changeset_id: draft.changeset_id });
     expect(early.isError).toBe(true);
     expect(early.text).toContain('preview_changeset');
 
     const pv = await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
-    expect(pv.data).toMatchObject({ added: ['img/lote.png'], modified: ['index.html'], deleted: [], ready_to_publish: true });
+    expect(pv.data).toMatchObject({ added: ['img/lote.png'], modified: ['lotes.html'], deleted: [], ready_to_publish: true });
 
     const pub = await call(c, 'publish', { changeset_id: draft.changeset_id });
     expect(pub.isError).toBe(false);
     expect(pub.text).toContain(`#${pub.data.release}`);
-    expect(siteFs.text('index.html')).toContain('$45.000');
+    expect(siteFs.text('lotes.html')).toContain('$45.000');
     expect(siteFs.files.has('img/lote.png')).toBe(true);
 
     const rels = await call(c, 'list_releases');
@@ -328,7 +332,7 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
 
     const rev = await call(c, 'revert_release', { release: pub.data.release });
     expect(rev.isError).toBe(false);
-    expect(siteFs.text('index.html')).toContain('$50.000');
+    expect(siteFs.text('lotes.html')).toContain('$50.000');
     expect(siteFs.files.has('img/lote.png')).toBe(false);
 
     const log = await call(c, 'get_activity_log', { limit: 10 });
@@ -453,8 +457,8 @@ describe('preview links', () => {
     // Only GET.
     expect((await fetch(`${base}${prefix}/nuevo.html`, { method: 'POST' })).status).toBe(405);
 
-    // Gone once the draft is published.
-    await call(c, 'publish', { changeset_id: draft.changeset_id });
+    // Gone once the draft is discarded (or published).
+    await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
     const gone = await get(`${prefix}/nuevo.html`);
     expect(gone.status).toBe(404);
     expect(await gone.text()).toContain('ya no está disponible');
@@ -465,5 +469,129 @@ describe('preview links', () => {
     const res = await get('/p/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/');
     expect(res.status).toBe(404);
     expect(res.headers.get('content-security-policy')).toMatch(/^sandbox /);
+  });
+});
+
+describe('approval link', () => {
+  it('flags many files, deletions, the home page, and "approve every publish"', () => {
+    const none = { added: ['a.html'], modified: ['b/index.html'], deleted: [] as string[] };
+    expect(approvalReasons(none, { approveEveryPublish: false })).toEqual([]);
+    expect(approvalReasons(none, { approveEveryPublish: true })).toEqual(['always']);
+    expect(approvalReasons({ added: Array.from({ length: 20 }, (_, i) => `p${i}.html`), modified: [], deleted: [] }, { approveEveryPublish: false })).toEqual(['many_files']);
+    expect(approvalReasons({ added: [], modified: ['index.html'], deleted: ['old.png'] }, { approveEveryPublish: false })).toEqual(['deletes', 'home_page']);
+  });
+
+  const cookiesOf = (res: globalThis.Response) => res.headers.getSetCookie().map((c) => c.split(';')[0]!);
+
+  /** Opens the approval link and signs in through the (fake) client area as the given service. */
+  async function signInToApprove(approvalUrl: string, accountId = 15, scope: 'approve' | 'publish' = 'approve') {
+    const path = new URL(approvalUrl).pathname;
+    const start = await get(path);
+    expect(start.status).toBe(302);
+    const loc = new URL(start.headers.get('location')!);
+    expect(loc.origin + loc.pathname).toBe(`${CA_URL}/index.php`);
+    const payload = verifyReq(reqKey, loc.searchParams.get('req')!)!;
+    expect(payload).toMatchObject({ purpose: 'approve', service_id: 15, app_name: 'ChatGPT' });
+    const bind = cookiesOf(start).find((c) => c.startsWith('crs_abind='))!;
+    const code = `ca-approve-${payload.rid}`;
+    caResults.set(code, { client_id: 12, account_id: accountId, domain: 'uat.example', server_id: '6', scope });
+    const cb = await get(`/oauth/callback?code=${code}&rid=${payload.rid}`, { cookie: bind });
+    const session = cookiesOf(cb).find((c) => c.startsWith('crs_appr='));
+    return { path, cb, session };
+  }
+
+  async function draftTouchingHome(c: Client, text = '<h1>Inicio nuevo</h1>') {
+    const { data: draft } = await call(c, 'start_changeset');
+    await call(c, 'write_files', { changeset_id: draft.changeset_id, files: [{ path: 'index.html', content: text }] });
+    await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+    return draft.changeset_id as string;
+  }
+
+  it('home page change: publish returns a link; the owner signs in, sees it and publishes', async () => {
+    const before = siteFs.text('index.html');
+    const c = await mcpClient(await connect('publish'));
+    const id = await draftTouchingHome(c);
+
+    const pub = await call(c, 'publish', { changeset_id: id });
+    expect(pub.isError).toBe(false);
+    expect(pub.data).toMatchObject({ needs_approval: true, reasons: ['home_page'] });
+    expect(pub.data.approval_url).toMatch(new RegExp(`^${base}/approve/[0-9a-f-]{36}$`));
+    expect(siteFs.text('index.html')).toBe(before);
+    expect((await call(c, 'publish', { changeset_id: id })).data.approval_url).toBe(pub.data.approval_url); // same pending request
+
+    const { path, cb, session } = await signInToApprove(pub.data.approval_url);
+    expect(cb.status).toBe(303);
+    expect(cb.headers.get('location')).toBe(path);
+    const pageRes = await get(path, { cookie: session! });
+    expect(pageRes.headers.get('x-frame-options')).toBe('DENY');
+    const html = await pageRes.text();
+    expect(html).toContain('Aprobar publicación');
+    expect(html).toContain('<code>index.html</code>');
+    expect(html).toContain('Cambia la página de inicio.');
+    expect(html).toMatch(/href="http:\/\/localhost:\d+\/p\/[A-Za-z0-9_-]{32}\/"/);
+
+    const post = (headers: Record<string, string>) =>
+      fetch(`${base}${path}`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers }, body: 'decision=approve' });
+    expect((await post({ cookie: session!, origin: 'https://evil.example' })).status).toBe(403);
+    expect((await post({ origin: base })).status).toBe(403); // no session
+    const ok = await post({ cookie: session!, origin: base });
+    expect(ok.status).toBe(303);
+    expect(siteFs.text('index.html')).toBe('<h1>Inicio nuevo</h1>');
+    expect(await (await get(path, { cookie: session! })).text()).toContain('Publicado');
+
+    const after = await call(c, 'publish', { changeset_id: id });
+    expect(after.data).toMatchObject({ approved_in_browser: true, release: expect.any(Number) });
+    const log = await call(c, 'get_activity_log', { limit: 3 });
+    expect(log.data.events[0]).toMatchObject({ action: 'publish', detail: { approved_in_browser: true } });
+    await c.close();
+  });
+
+  it('another account, or a connection code, cannot approve', async () => {
+    const c = await mcpClient(await connect('publish'));
+    const id = await draftTouchingHome(c, '<h1>otro</h1>');
+    const { data } = await call(c, 'publish', { changeset_id: id });
+    const other = await signInToApprove(data.approval_url, 999);
+    expect(other.cb.status).toBe(403);
+    expect(await other.cb.text()).toContain('no administra este sitio');
+    expect(other.session).toBeUndefined();
+    const wrongScope = await signInToApprove(data.approval_url, 15, 'publish');
+    expect(wrongScope.cb.status).toBe(403);
+    await call(c, 'discard_changeset', { changeset_id: id });
+    await c.close();
+  });
+
+  it('an approval code never becomes a connection', async () => {
+    const { cookie, payload } = await startAuthorize(await register());
+    caResults.set('ca-approve-scope', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'approve' });
+    const back = new URL((await get(`/oauth/callback?code=ca-approve-scope&rid=${payload.rid}`, { cookie })).headers.get('location')!);
+    expect(back.searchParams.get('error')).toBe('access_denied');
+  });
+
+  it('refuses when the draft changed after approval was requested; reject is final for that version', async () => {
+    const before = siteFs.text('index.html');
+    const c = await mcpClient(await connect('publish'));
+    const id = await draftTouchingHome(c, '<h1>v1</h1>');
+    const { data } = await call(c, 'publish', { changeset_id: id });
+    const { path, session } = await signInToApprove(data.approval_url);
+    // The AI changes the draft (and even previews it again) while the owner is looking.
+    await call(c, 'write_files', { changeset_id: id, files: [{ path: 'index.html', content: '<h1>v2 sneaky</h1>' }] });
+    await call(c, 'preview_changeset', { changeset_id: id });
+    expect((await get(path, { cookie: session! })).status).toBe(409);
+    const post = await fetch(`${base}${path}`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: session!, origin: base }, body: 'decision=approve' });
+    expect(post.status).toBe(409);
+    expect(siteFs.text('index.html')).toBe(before);
+
+    // The new version gets its own request; the owner rejects it.
+    const v2 = await call(c, 'publish', { changeset_id: id });
+    expect(v2.data.approval_url).not.toBe(data.approval_url);
+    const s2 = await signInToApprove(v2.data.approval_url);
+    const rej = await fetch(`${base}${s2.path}`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded', cookie: s2.session!, origin: base }, body: 'decision=reject' });
+    expect(rej.status).toBe(303);
+    expect(await (await get(s2.path, { cookie: s2.session! })).text()).toContain('No se publicó');
+    const again = await call(c, 'publish', { changeset_id: id });
+    expect(again.isError).toBe(true);
+    expect(again.text).toContain('decidió no publicar');
+    expect(siteFs.text('index.html')).toBe(before);
+    await c.close();
   });
 });

@@ -18,6 +18,21 @@ The connector ships as a container image and plain Kubernetes manifests (`k8s/`)
 - the storage class;
 - a recurring volume backup job.
 
+## Environments
+
+| Environment | Deploys on | Namespace | Approval |
+|---|---|---|---|
+| `staging` | every push to `main` | `crservers-connector-staging` | none |
+| `production` | a `vX.Y.Z` tag | `crservers-connector` | required |
+
+Staging talks to the test client area, so whole sign-in flows can be tried without touching real accounts. Each GitHub environment holds its own variables and secrets (below); the workflow is the same.
+
+Bootstrap a new environment once, as a cluster admin:
+
+```bash
+NAMESPACE=crservers-connector-staging envsubst '${NAMESPACE}' < k8s/bootstrap/deployer-rbac.yml | kubectl apply -f -
+```
+
 ## Configuration
 
 | Name | Kind | Purpose |
@@ -25,6 +40,8 @@ The connector ships as a container image and plain Kubernetes manifests (`k8s/`)
 | `INGRESS_HOST` | variable | Public host name; `PUBLIC_URL` is `https://<host>` |
 | `CLIENT_AREA_URL` | variable | CR Servers client area origin |
 | `EXTRA_REDIRECT_URIS` | variable | Optional extra exact OAuth redirect URIs |
+| `NAMESPACE` | variable | Kubernetes namespace (default `crservers-connector`) |
+| `BACKUPS` | variable | `off` skips the daily dump job (staging) |
 | `KUBE_CONFIG_DATA` | secret | Base64 kubeconfig for the namespace-scoped deploy account |
 | `POSTGRES_PASSWORD` | secret | Database password |
 | `CLIENT_AREA_API_ID`, `CLIENT_AREA_API_KEY` | secret | Server-to-server key for redeeming sign-in codes (IP-restricted, least privilege) |
@@ -43,10 +60,10 @@ node -e "console.log(require('crypto').randomBytes(32).toString('base64url'))"
 git tag vX.Y.Z && git push origin vX.Y.Z
 ```
 
-The workflow then:
+A push to `main` deploys to staging right away. A tag deploys to production. The workflow:
 1. Runs the tests.
 2. Builds the image.
-3. Waits for approval on the `production` environment.
+3. For production, waits for approval.
 4. Applies the secrets and rolls out Postgres, then the app.
 5. Checks `/healthz`.
 

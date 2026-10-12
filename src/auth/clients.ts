@@ -27,6 +27,8 @@ export class PgClientsStore implements OAuthRegisteredClientsStore {
     if (!Array.isArray(uris) || uris.length === 0) throw new InvalidClientMetadataError('redirect_uris is required');
     for (const u of uris) {
       if (typeof u !== 'string' || !this.redirectAllowlist.includes(u)) {
+        // Logged so a new AI host callback can be added to EXTRA_REDIRECT_URIS (a URL, not a secret).
+        console.warn(JSON.stringify({ t: new Date().toISOString(), event: 'redirect_uri_refused', redirect_uri: String(u).slice(0, 300) }));
         throw new InvalidClientMetadataError(`redirect_uri not allowed: ${String(u)}`);
       }
     }

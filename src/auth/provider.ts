@@ -10,7 +10,7 @@ import type { SiteRepo } from '../sites.js';
 import type { ClientAreaApi } from './clientarea.js';
 import type { PgClientsStore } from './clients.js';
 import { signReq } from './req.js';
-import { signInErrorPage } from '../ui/page.js';
+import { pickLang, signInErrorPage } from '../ui/page.js';
 
 /**
  * OAuth 2.1 authorization server for the MCP endpoint (docs/ARCHITECTURE.md, "Sign-in" and "Tokens").
@@ -83,7 +83,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       [rid],
     )).rows[0];
     if (!ar || !binding || !safeEqual(Buffer.from(hashToken(binding)), Buffer.from(ar.binding_hash))) {
-      return void res.status(400).type('html').send(signInErrorPage());
+      return void res.status(400).type('html').send(signInErrorPage(pickLang(req.get('accept-language'))));
     }
 
     const back = new URL(ar.redirect_uri);

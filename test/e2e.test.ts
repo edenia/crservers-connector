@@ -201,6 +201,12 @@ describe('authorization code flow', () => {
     const bad = await get('/oauth/callback?code=x&rid=nope');
     expect(bad.status).toBe(400);
     expect(await bad.text()).toContain('La solicitud expiró');
+    const en = await get('/', { 'accept-language': 'en-US,en;q=0.9,es;q=0.5' });
+    expect(await en.text()).toContain('CR Servers AI connector');
+    const esPref = await get('/', { 'accept-language': 'es-CR,es;q=0.9,en;q=0.8' });
+    expect(await esPref.text()).toContain('Conector de IA de CR Servers');
+    const enErr = await get('/oauth/callback?code=x&rid=nope', { 'accept-language': 'en' });
+    expect(await enErr.text()).toContain('This request expired');
   });
 
   it('the callback requires the browser that started the flow', async () => {

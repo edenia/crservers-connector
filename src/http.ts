@@ -4,6 +4,7 @@ import { requireBearerAuth } from '@modelcontextprotocol/sdk/server/auth/middlew
 import type { ConnectorOAuthProvider } from './auth/provider.js';
 import { mcpHandler, mcpMethodNotAllowed } from './mcp/handler.js';
 import type { McpDeps } from './mcp/tools.js';
+import type { PreviewService } from './preview/preview.js';
 import { landingPage, pickLang } from './ui/page.js';
 
 export const SCOPES_SUPPORTED = ['site', 'offline_access'];
@@ -13,6 +14,7 @@ export interface AppDeps {
   issuer: string;
   mcpUrl: string;
   mcp: McpDeps;
+  preview: PreviewService;
 }
 
 /**
@@ -34,7 +36,8 @@ export function createApp(d: AppDeps): Express {
           t: new Date().toISOString(),
           m: req.method,
           // originalUrl keeps the mount path (req.path is relative inside the SDK's routers); drop the query.
-          p: req.originalUrl.split('?')[0],
+          // Preview tokens are bearer secrets: never log them.
+          p: req.originalUrl.split('?')[0]!.replace(/^\/p\/[^/]+/, '/p/:token'),
           s: res.statusCode,
           ms: Number((process.hrtime.bigint() - start) / 1_000_000n),
           ua: (req.get('user-agent') ?? '').slice(0, 80),
@@ -83,6 +86,11 @@ export function createApp(d: AppDeps): Express {
 
   app.get('/', (_req, res) => {
     res.type('html').send(landingPage(d.mcpUrl, pickLang(_req.get('accept-language'))));
+  });
+
+  // Draft previews: sandboxed, noindex, token in the path (src/preview/preview.ts).
+  app.use('/p', (req, res, next) => {
+    d.preview.handle(req, res).catch(next);
   });
 
   app.get('/healthz', (_req, res) => {

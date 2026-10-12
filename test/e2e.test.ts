@@ -12,6 +12,7 @@ import { DeployCore } from '../src/deploy/core.js';
 import { AuditLog, PgBlobStore, PgDraftStore, PgReleaseStore } from '../src/deploy/pgstores.js';
 import { MemorySiteFs } from '../src/deploy/sitefs.js';
 import { createApp } from '../src/http.js';
+import { PreviewService } from '../src/preview/preview.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SiteRepo } from '../src/sites.js';
@@ -36,6 +37,7 @@ let provider: ConnectorOAuthProvider;
 const siteFs = new MemorySiteFs({ 'index.html': '<h1>Lotes</h1><p>$50.000</p>', 'assets/a.css': 'a{}' });
 siteFs.close = async () => undefined;
 const caResults = new Map<string, ClientAreaGrant | null>();
+const liveFetches: string[] = [];
 const clientArea: ClientAreaApi = { exchange: async (code) => caResults.get(code) ?? null };
 
 beforeAll(async () => {
@@ -64,8 +66,20 @@ beforeAll(async () => {
   });
   const core = new DeployCore({ drafts: new PgDraftStore(pool), releases: new PgReleaseStore(pool), blobs: new PgBlobStore(pool) });
   const clientsForNames = new PgClientsStore(pool, [CHATGPT]);
-  const mcp = { core, sites, audit: new AuditLog(pool), openFs: async () => siteFs, appName: (id: string) => clientsForNames.displayName(id) };
-  server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp }));
+  // The "live site" for previews: the in-memory site files, as the web server would serve them.
+  const fetchLive = async (url: string) => {
+    liveFetches.push(url);
+    const u = new URL(url);
+    if (u.pathname === '/old') return new Response(null, { status: 301, headers: { location: `https://uat.example/new?x=1` } });
+    const path = decodeURIComponent(u.pathname.slice(1)) || 'index.html';
+    const f = siteFs.files.get(path.endsWith('/') ? `${path}index.html` : path);
+    if (!f) return new Response('nope', { status: 404 });
+    const type = path.endsWith('.css') ? 'text/css' : path.endsWith('.html') || path === '' ? 'text/html; charset=utf-8' : 'application/octet-stream';
+    return new Response(new Uint8Array(f.data), { status: 200, headers: { 'content-type': type } });
+  };
+  const preview = new PreviewService(pool, sites, base, fetchLive);
+  const mcp = { core, sites, preview, audit: new AuditLog(pool), openFs: async () => siteFs, appName: (id: string) => clientsForNames.displayName(id) };
+  server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview }));
 });
 
 afterAll(async () => {
@@ -389,5 +403,67 @@ describe('large files', () => {
     expect(siteFs.text('grande.html')).toContain('<title>Lotes en Turrialba</title>');
     expect(siteFs.text('grande.html')).toContain('$45.000');
     await c.close();
+  });
+});
+
+describe('preview links', () => {
+  it('shows the draft as the site would look, sandboxed, with live files filling the gaps', async () => {
+    siteFs.put('assets/site.css', 'body{background:url(/img/bg.png)}');
+    const c = await mcpClient(await connect('publish'));
+    const { data: draft } = await call(c, 'start_changeset');
+    await call(c, 'write_files', {
+      changeset_id: draft.changeset_id,
+      files: [
+        { path: 'nuevo.html', content: '<html><head><title>N</title><link href="/assets/site.css" rel="stylesheet"></head><body><a href="https://uat.example/contacto.html">c</a><img srcset="/a.png 1x, /b.png 2x"><a href="https://otro.example/">x</a></body></html>' },
+        { path: 'docs/index.html', content: '<p>docs borrador</p>' },
+      ],
+    });
+    await call(c, 'delete_files', { changeset_id: draft.changeset_id, paths: ['assets/a.css'] });
+    const pv = await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+    const url = new URL(pv.data.preview_url);
+    expect(url.pathname).toMatch(/^\/p\/[A-Za-z0-9_-]{32}\/$/);
+    expect(pv.text).toContain(pv.data.preview_url);
+    const prefix = url.pathname.slice(0, -1);
+
+    const page = await get(`${prefix}/nuevo.html`);
+    expect(page.status).toBe(200);
+    expect(page.headers.get('content-security-policy')).toMatch(/^sandbox /);
+    expect(page.headers.get('content-security-policy')).not.toContain('allow-same-origin');
+    expect(page.headers.get('x-robots-tag')).toContain('noindex');
+    const html = await page.text();
+    expect(html).toContain(`href="${prefix}/assets/site.css"`);
+    expect(html).toContain(`href="${prefix}/contacto.html"`);
+    expect(html).toContain(`srcset="${prefix}/a.png 1x, ${prefix}/b.png 2x"`);
+    expect(html).toContain('href="https://otro.example/"');
+    expect(html).toContain('Vista previa de un borrador: uat.example');
+    expect(html).toContain('<meta name="robots" content="noindex, nofollow">');
+
+    // Not in the draft: comes from the live site (CSS rewritten too).
+    const css = await get(`${prefix}/assets/site.css`);
+    expect(await css.text()).toBe(`body{background:url(${prefix}/img/bg.png)}`);
+    // Directory index from the draft; deleted in the draft → 404 even though it's live.
+    expect(await (await get(`${prefix}/docs/`)).text()).toContain('docs borrador');
+    expect((await get(`${prefix}/assets/a.css`)).status).toBe(404);
+    // Live redirects stay inside the preview.
+    const redir = await get(`${prefix}/old`);
+    expect(redir.headers.get('location')).toBe(`${prefix}/new?x=1`);
+    // Live home page, English banner.
+    expect(await (await get(`${prefix}/`, { 'accept-language': 'en' })).text()).toContain('Draft preview: uat.example');
+    expect(liveFetches.every((u) => u.startsWith('https://uat.example/'))).toBe(true);
+    // Only GET.
+    expect((await fetch(`${base}${prefix}/nuevo.html`, { method: 'POST' })).status).toBe(405);
+
+    // Gone once the draft is published.
+    await call(c, 'publish', { changeset_id: draft.changeset_id });
+    const gone = await get(`${prefix}/nuevo.html`);
+    expect(gone.status).toBe(404);
+    expect(await gone.text()).toContain('ya no está disponible');
+    await c.close();
+  });
+
+  it('unknown tokens get the expired page', async () => {
+    const res = await get('/p/AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA/');
+    expect(res.status).toBe(404);
+    expect(res.headers.get('content-security-policy')).toMatch(/^sandbox /);
   });
 });

@@ -9,6 +9,7 @@ import { DeployCore } from './deploy/core.js';
 import { FtpSiteFs } from './deploy/ftpfs.js';
 import { AuditLog, PgBlobStore, PgDraftStore, PgReleaseStore } from './deploy/pgstores.js';
 import { createApp } from './http.js';
+import { PreviewService } from './preview/preview.js';
 import { SiteRepo } from './sites.js';
 
 const cfg = loadConfig();
@@ -30,9 +31,10 @@ const provider = new ConnectorOAuthProvider({
 });
 
 const core = new DeployCore({ drafts: new PgDraftStore(pool), releases: new PgReleaseStore(pool), blobs: new PgBlobStore(pool) });
-const mcp = { core, sites, audit: new AuditLog(pool), openFs: async (siteId: string) => new FtpSiteFs(await sites.ftpConfig(siteId)), appName: (id: string) => clients.displayName(id) };
+const preview = new PreviewService(pool, sites, cfg.PUBLIC_URL);
+const mcp = { core, sites, preview, audit: new AuditLog(pool), openFs: async (siteId: string) => new FtpSiteFs(await sites.ftpConfig(siteId)), appName: (id: string) => clients.displayName(id) };
 
-const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp });
+const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp, preview });
 const server = app.listen(cfg.PORT, () => console.log(`crservers-connector listening on :${cfg.PORT} (${cfg.PUBLIC_URL})`));
 
 for (const sig of ['SIGTERM', 'SIGINT'] as const) {

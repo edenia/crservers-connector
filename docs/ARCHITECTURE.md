@@ -52,6 +52,11 @@ The server's instructions tell the AI to:
 
 **Preview gate.** `publish` only accepts a draft whose current version was previewed. A later write requires a new preview. This holds even when the AI host is set to run tools without asking.
 
+**Preview links.** `preview_changeset` also returns a private link, valid for an hour, that shows the draft as the site would look. Files the draft changed come from the draft; everything else comes from the live site. The link stops working once the draft is published, discarded or expires. Pages are served under `/p/<token>/` on the connector's host with these protections:
+- `Content-Security-Policy: sandbox` without `allow-same-origin`, so draft pages run in an opaque origin and can't read or set the connector's cookies or storage;
+- links to the site's own pages are rewritten to stay inside the preview;
+- a banner marks it as an unpublished draft, and nothing is indexed, cached or logged with its token.
+
 **Conflict check.** If a touched file changed on the live site since the draft was based on it, preview reports it and publish refuses. Only one publish or revert runs at a time per site.
 
 **Undo records.** Before anything changes, the previous content of every touched file is saved. The last 5 releases per site keep these records. `revert_release` puts files back as they were before a release, undoing that release and any later ones. The revert is itself a release, so it can be undone too. If files were changed outside the connector since, the revert is refused.

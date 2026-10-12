@@ -24,6 +24,26 @@ export function createApp(d: AppDeps): Express {
   app.set('trust proxy', 1); // behind the k8s ingress
   app.disable('x-powered-by');
 
+  // One JSON line per request. Path only: query strings carry codes and state.
+  app.use((req, res, next) => {
+    if (req.path === '/healthz') return next();
+    const start = process.hrtime.bigint();
+    res.on('finish', () => {
+      console.log(
+        JSON.stringify({
+          t: new Date().toISOString(),
+          m: req.method,
+          p: req.path,
+          s: res.statusCode,
+          ms: Number((process.hrtime.bigint() - start) / 1_000_000n),
+          ua: (req.get('user-agent') ?? '').slice(0, 80),
+          ip: req.ip,
+        }),
+      );
+    });
+    next();
+  });
+
   const issuerUrl = new URL(d.issuer);
   const resourceServerUrl = new URL(d.mcpUrl);
 

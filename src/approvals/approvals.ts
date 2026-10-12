@@ -12,31 +12,29 @@ import type { Site, SiteRepo } from '../sites.js';
 import { esc, type Lang, page, pickLang } from '../ui/page.js';
 
 /**
- * Approval link (docs/ARCHITECTURE.md, "Approval link"). Big changes, or every change when the
- * client turned on "Aprobar cada publicación", don't go live from the chat: `publish` returns
+ * Approval link (docs/ARCHITECTURE.md, "Approval link"). When the client turned on "Aprobar cada
+ * publicación" (off by default), changes don't go live from the chat: `publish` returns
  * /approve/<id> instead. Opening it sends the browser through the client area with a signed
  * "approve" request; the plugin checks that the signed-in client owns the site and returns a
  * one-time code. The page then shows the change and a preview, and publishes only if the
  * draft is still exactly the version the AI asked about.
  */
 
-export const MANY_FILES = 20;
 const SIGNIN_TTL_S = 600;
 const SESSION_TTL_S = 1800;
 const APPROVAL_TTL_S = 24 * 3600;
 const BIND_COOKIE = 'crs_abind';
 const SESSION_COOKIE = 'crs_appr';
 
-export type ApprovalReason = 'many_files' | 'deletes' | 'home_page' | 'always';
+export type ApprovalReason = 'always';
 
-/** Why a change needs the owner's approval in the browser; empty = the chat confirmation is enough. */
-export function approvalReasons(s: { added: string[]; modified: string[]; deleted: string[] }, site: Pick<Site, 'approveEveryPublish'>): ApprovalReason[] {
-  const reasons: ApprovalReason[] = [];
-  if (site.approveEveryPublish) reasons.push('always');
-  if (s.added.length + s.modified.length + s.deleted.length >= MANY_FILES) reasons.push('many_files');
-  if (s.deleted.length) reasons.push('deletes');
-  if ([...s.added, ...s.modified, ...s.deleted].some((p) => p === 'index.html' || p === 'index.htm')) reasons.push('home_page');
-  return reasons;
+/**
+ * Why a change needs the owner's approval in the browser; empty = the chat confirmation is enough.
+ * Opt-in only: size-based rules (20+ files, deletions, the home page) were tried on staging and
+ * dropped. The preview link plus one-step undo cover ordinary changes better than a second sign-in.
+ */
+export function approvalReasons(_s: { added: string[]; modified: string[]; deleted: string[] }, site: Pick<Site, 'approveEveryPublish'>): ApprovalReason[] {
+  return site.approveEveryPublish ? ['always'] : [];
 }
 
 interface ApprovalRow {
@@ -78,7 +76,7 @@ const T = {
     title: 'Aprobar publicación',
     lead: (app: string, domain: string) => `${app} quiere publicar estos cambios en <strong>${domain}</strong>.`,
     why: 'Le pedimos confirmar porque:',
-    reasons: { always: 'Usted pidió aprobar cada publicación.', many_files: `Cambia ${MANY_FILES} archivos o más.`, deletes: 'Borra archivos.', home_page: 'Cambia la página de inicio.' } as Record<ApprovalReason, string>,
+    reasons: { always: 'Usted pidió aprobar cada publicación.' } as Record<ApprovalReason, string>,
     added: 'Nuevos',
     modified: 'Modificados',
     deleted: 'Borrados',
@@ -104,7 +102,7 @@ const T = {
     title: 'Approve publishing',
     lead: (app: string, domain: string) => `${app} wants to publish these changes to <strong>${domain}</strong>.`,
     why: 'We ask you to confirm because:',
-    reasons: { always: 'You asked to approve every publish.', many_files: `It changes ${MANY_FILES} files or more.`, deletes: 'It deletes files.', home_page: 'It changes the home page.' } as Record<ApprovalReason, string>,
+    reasons: { always: 'You asked to approve every publish.' } as Record<ApprovalReason, string>,
     added: 'New',
     modified: 'Changed',
     deleted: 'Deleted',
@@ -232,8 +230,10 @@ export class ApprovalService {
     if (!found) return this.message(res, lang, 404, t.expiredTitle, t.expiredBody);
     const { a, site } = found;
     // The session cookie is SameSite=Lax (never sent on cross-site POSTs); check the origin as well.
+    // With Referrer-Policy: no-referrer browsers send "Origin: null" on form posts, so the page uses
+    // same-origin, and Sec-Fetch-Site is accepted too.
     const origin = req.get('origin');
-    const sameOrigin = origin ? origin === new URL(this.d.publicUrl).origin : req.get('sec-fetch-site') === 'same-origin';
+    const sameOrigin = origin === new URL(this.d.publicUrl).origin || req.get('sec-fetch-site') === 'same-origin';
     if (!sameOrigin || !this.hasSession(req, a)) return void res.status(403).type('html').send(page({ lang, title: t.expiredTitle, state: 'info', body: `<p>${t.expiredBody}</p>` }));
     if (a.status !== 'pending' || a.expires_at <= new Date()) return void res.redirect(303, `/approve/${a.id}`);
 
@@ -315,7 +315,7 @@ export class ApprovalService {
 }
 
 function noStore(res: Response): void {
-  res.set({ 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'no-referrer', 'x-frame-options': 'DENY', 'content-security-policy': "frame-ancestors 'none'" });
+  res.set({ 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'same-origin', 'x-frame-options': 'DENY', 'content-security-policy': "frame-ancestors 'none'" });
 }
 
 function readCookie(header: string | undefined, name: string): string {

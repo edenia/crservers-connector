@@ -7,7 +7,7 @@ import { MB, PathError } from '../deploy/paths.js';
 import type { AuditLog } from '../deploy/pgstores.js';
 import type { SiteFs } from '../deploy/sitefs.js';
 import type { PreviewService } from '../preview/preview.js';
-import { MANY_FILES, approvalReasons, type ApprovalService } from '../approvals/approvals.js';
+import { approvalReasons, type ApprovalService } from '../approvals/approvals.js';
 import type { Site, SiteRepo } from '../sites.js';
 
 /**
@@ -274,7 +274,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     {
       title: 'Publish draft',
       description:
-        `Publishes the previewed draft to the live site. Only after the user explicitly confirms. Saves an undo record first. Big changes (${MANY_FILES}+ files, deletions, or the home page) return needs_approval with an approval_url for the user instead.`,
+        `Publishes the previewed draft to the live site. Only after the user explicitly confirms. Saves an undo record first. If the site owner asked to approve every publish, returns needs_approval with an approval_url for the user instead.`,
       inputSchema: { changeset_id: z.string() },
       annotations: LIVE,
     },

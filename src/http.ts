@@ -6,7 +6,8 @@ import { mcpHandler, mcpMethodNotAllowed } from './mcp/handler.js';
 import type { McpDeps } from './mcp/tools.js';
 import type { PreviewService } from './preview/preview.js';
 import type { ApprovalService } from './approvals/approvals.js';
-import { landingPage, pickLang } from './ui/page.js';
+import { LOGO_SVG } from './ui/logo.js';
+import { LOGO_PATH, landingPage, pickLang } from './ui/page.js';
 
 export const SCOPES_SUPPORTED = ['site', 'offline_access'];
 
@@ -101,6 +102,10 @@ export function createApp(d: AppDeps): Express {
   // Draft previews: sandboxed, noindex, token in the path (src/preview/preview.ts).
   app.use('/p', (req, res, next) => {
     d.preview.handle(req, res).catch(next);
+  });
+
+  app.get(LOGO_PATH, (_req, res) => {
+    res.set('cache-control', 'public, max-age=86400').type('image/svg+xml').send(LOGO_SVG);
   });
 
   app.get('/healthz', (_req, res) => {

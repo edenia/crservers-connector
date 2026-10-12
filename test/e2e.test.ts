@@ -82,7 +82,11 @@ beforeAll(async () => {
   const audit = new AuditLog(pool);
   const appName = (id: string) => clientsForNames.displayName(id);
   const approvals = new ApprovalService({ pool, sites, core, audit, openFs: async () => siteFs, preview, clientArea, clientAreaUrl: CA_URL, reqKey, publicUrl: base, appName });
-  const mcp = { core, sites, preview, approvals, audit, openFs: async () => siteFs, appName };
+  const fetchUrl = async (url: string) => {
+    if (url.endsWith('/foto.png')) return { data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]), contentType: 'image/png', finalUrl: url };
+    return { data: Buffer.from('<!doctype html><p>login</p>'), contentType: 'text/html', finalUrl: url };
+  };
+  const mcp = { core, sites, preview, approvals, audit, openFs: async () => siteFs, appName, fetchUrl };
   server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals }));
 });
 
@@ -258,8 +262,9 @@ describe('authorization code flow', () => {
 });
 
 /** Runs the whole sign-in and returns an access token for the given client-area permission. */
+let sharedClientId: string | undefined; // /register is rate limited per IP
 async function connect(permission: 'publish' | 'preview'): Promise<string> {
-  const clientId = await register();
+  const clientId = (sharedClientId ??= await register());
   const { cookie, verifier, payload } = await startAuthorize(clientId);
   const caCode = `ca-${permission}-${payload.rid}`;
   caResults.set(caCode, { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: permission });
@@ -286,7 +291,7 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     const { tools } = await c.listTools();
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
     expect(Object.keys(byName).sort()).toEqual(
-      ['delete_files', 'discard_changeset', 'edit_file', 'get_activity_log', 'get_site_info', 'get_usage_limits', 'list_files', 'list_releases', 'list_sites', 'preview_changeset', 'publish', 'read_file', 'revert_release', 'start_changeset', 'write_files'].sort(),
+      ['delete_files', 'discard_changeset', 'edit_file', 'import_from_url', 'get_activity_log', 'get_site_info', 'get_usage_limits', 'list_files', 'list_releases', 'list_sites', 'preview_changeset', 'publish', 'read_file', 'revert_release', 'start_changeset', 'write_files'].sort(),
     );
     for (const t of tools) {
       expect(t.annotations, t.name).toMatchObject({ readOnlyHint: expect.any(Boolean), destructiveHint: expect.any(Boolean), openWorldHint: expect.any(Boolean) });
@@ -618,5 +623,24 @@ describe('without the opt-in', () => {
     const res = await get('/assets/crservers-logo.svg');
     expect(res.headers.get('content-type')).toContain('image/svg+xml');
     expect(await res.text()).toMatch(/^<svg /);
+  });
+});
+
+describe('import_from_url', () => {
+  it('brings a media file into the draft, and refuses pages pretending to be images', async () => {
+    const c = await mcpClient(await connect('publish'));
+    const { data: draft } = await call(c, 'start_changeset');
+    const good = await call(c, 'import_from_url', { changeset_id: draft.changeset_id, url: 'https://images.example/foto.png', path: 'img/foto.png' });
+    expect(good.isError).toBe(false);
+    expect(good.data).toMatchObject({ path: 'img/foto.png', size: 11 });
+    const bad = await call(c, 'import_from_url', { changeset_id: draft.changeset_id, url: 'https://drive.example/share', path: 'img/otra.png' });
+    expect(bad.isError).toBe(true);
+    expect(bad.text).toContain('not a .png');
+    const text = await call(c, 'import_from_url', { changeset_id: draft.changeset_id, url: 'https://x.example/a', path: 'pagina.html' });
+    expect(text.isError).toBe(true);
+    const pv = await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+    expect(pv.data.added).toEqual(['img/foto.png']);
+    await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
+    await c.close();
   });
 });

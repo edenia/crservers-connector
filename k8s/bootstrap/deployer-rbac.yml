@@ -1,21 +1,22 @@
-# One-time, applied by a cluster admin. Gives CI a deploy identity that can only touch
-# the crservers-connector namespace. Apply storageclass.yml in the same step.
+# One-time per environment, applied by a cluster admin. Gives CI a deploy identity that can
+# only touch one namespace. Apply storageclass.yml in the same step (once per cluster).
+#   NAMESPACE=crservers-connector envsubst '${NAMESPACE}' < deployer-rbac.yml | kubectl apply -f -
 apiVersion: v1
 kind: Namespace
 metadata:
-  name: crservers-connector
+  name: ${NAMESPACE}
 ---
 apiVersion: v1
 kind: ServiceAccount
 metadata:
   name: connector-deployer
-  namespace: crservers-connector
+  namespace: ${NAMESPACE}
 ---
 apiVersion: v1
 kind: Secret
 metadata:
   name: connector-deployer-token
-  namespace: crservers-connector
+  namespace: ${NAMESPACE}
   annotations:
     kubernetes.io/service-account.name: connector-deployer
 type: kubernetes.io/service-account-token
@@ -24,7 +25,7 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
   name: connector-deployer
-  namespace: crservers-connector
+  namespace: ${NAMESPACE}
 rules:
   - apiGroups: ['']
     resources: [configmaps, secrets, services, pods, pods/log, persistentvolumeclaims]
@@ -43,11 +44,11 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
   name: connector-deployer
-  namespace: crservers-connector
+  namespace: ${NAMESPACE}
 subjects:
   - kind: ServiceAccount
     name: connector-deployer
-    namespace: crservers-connector
+    namespace: ${NAMESPACE}
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: Role

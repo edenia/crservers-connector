@@ -49,7 +49,7 @@ beforeAll(async () => {
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   base = `http://localhost:${(server.address() as AddressInfo).port}`;
   const mcpUrl = `${base}/mcp`;
-  issuer = new URL(base).href;
+  issuer = base;
   const sites = new SiteRepo(pool, randomBytes(32));
   await sites.add({ serviceId: 15, domain: 'uat.example', ftpHost: 'iwx.test', ftpUser: 'crsconnect@uat.example', ftpPassword: 'pw' });
   provider = new ConnectorOAuthProvider({
@@ -125,11 +125,12 @@ async function startAuthorize(clientId: string, scope = 'site offline_access') {
 describe('metadata', () => {
   it('advertises iss support, CIMD and offline_access', async () => {
     const m = (await (await get('/.well-known/oauth-authorization-server')).json()) as Record<string, unknown>;
-    expect(issuer).toBe(`${base}/`);
+    expect(issuer).toBe(base); // no trailing slash (RFC 8414 exact match)
     expect(m).toMatchObject({ issuer, authorization_response_iss_parameter_supported: true, client_id_metadata_document_supported: true, code_challenge_methods_supported: ['S256'] });
     expect(m.scopes_supported).toContain('offline_access');
     const prm = (await (await get('/.well-known/oauth-protected-resource/mcp')).json()) as Record<string, unknown>;
     expect(prm.resource).toBe(`${base}/mcp`);
+    expect(prm.authorization_servers).toEqual([issuer]);
   });
 });
 

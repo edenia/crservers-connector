@@ -88,8 +88,8 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
 
     const back = new URL(ar.redirect_uri);
     if (ar.state) back.searchParams.set('state', ar.state);
-    // RFC 9207: must equal the metadata `issuer` exactly (URL.href, with the trailing slash).
-    back.searchParams.set('iss', new URL(this.d.issuer).href);
+    // RFC 9207: must equal the metadata `issuer` exactly (origin, no trailing slash).
+    back.searchParams.set('iss', this.d.issuer.replace(/\/+$/, ''));
 
     if (req.query.error || typeof req.query.code !== 'string') {
       back.searchParams.set('error', 'access_denied');

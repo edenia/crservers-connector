@@ -48,14 +48,30 @@ export function createApp(d: AppDeps): Express {
   const resourceServerUrl = new URL(d.mcpUrl);
 
   // Our metadata first: the SDK's lacks RFC 9207 `iss` support and CIMD advertisement.
+  // RFC 8414: `issuer` must equal what clients derive from our origin, with no trailing slash
+  // (URL.href adds one). Strict clients reject a mismatch.
+  const issuer = d.issuer.replace(/\/+$/, '');
   const metadata = {
     ...createOAuthMetadata({ provider: d.provider, issuerUrl, scopesSupported: SCOPES_SUPPORTED }),
+    issuer,
     authorization_response_iss_parameter_supported: true,
     client_id_metadata_document_supported: true,
     token_endpoint_auth_methods_supported: ['none', 'client_secret_post'],
   };
   app.get('/.well-known/oauth-authorization-server', (_req, res) => {
     res.set('cache-control', 'public, max-age=300').json(metadata);
+  });
+
+  // Ours too, so authorization_servers carries the same slash-free issuer.
+  const resourceMetadata = {
+    resource: d.mcpUrl,
+    authorization_servers: [issuer],
+    scopes_supported: SCOPES_SUPPORTED,
+    bearer_methods_supported: ['header'],
+    resource_name: 'CR Servers',
+  };
+  app.get('/.well-known/oauth-protected-resource/mcp', (_req, res) => {
+    res.set('cache-control', 'public, max-age=300').json(resourceMetadata);
   });
 
   app.use(mcpAuthRouter({ provider: d.provider, issuerUrl, resourceServerUrl, scopesSupported: SCOPES_SUPPORTED, resourceName: 'CR Servers' }));

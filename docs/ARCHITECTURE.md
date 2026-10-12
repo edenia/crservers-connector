@@ -38,7 +38,7 @@ All tools are scoped to the connection's site and declare their MCP annotations.
 | Kind | Tools |
 |---|---|
 | Read-only | `list_sites`, `get_site_info`, `get_usage_limits`, `list_files`, `read_file`, `list_releases`, `get_activity_log` |
-| Draft (nothing goes live) | `start_changeset`, `write_files`, `edit_file`, `delete_files`, `preview_changeset`, `discard_changeset` |
+| Draft (nothing goes live) | `start_changeset`, `write_files`, `edit_file`, `import_from_url`, `delete_files`, `preview_changeset`, `discard_changeset` |
 | Live (destructive, the host asks the user) | `publish`, `revert_release` |
 
 The server's instructions tell the AI to:
@@ -68,6 +68,12 @@ When it's on, `publish` doesn't go live. It returns an approval link for the AI 
 **Two-phase publish:**
 1. New content is uploaded under temporary names. If that fails, nothing on the live site changed.
 2. Files are renamed into place, then deletions happen last. If this fails, whatever was already applied is restored from the undo record.
+
+**Importing files.** Photos and other media rarely fit through a chat as base64, so `import_from_url` downloads one from a public link straight into the draft. Typical sources are an image the AI generated, a stock photo, or a Google Drive or Dropbox share link, which is converted to a direct download.
+- Media only: images, video, audio, fonts and PDF.
+- The first bytes must match the extension, so a sign-in page can't land as `foto.png`.
+- Public addresses only, checked on every connection, including after redirects. Loopback, private, link-local, carrier-grade NAT and cluster addresses are refused even when a public name resolves to them.
+- At most 5 redirects, 30 seconds, and the usual per-file size cap.
 
 **Transport.** FTPS with certificate verification, using a deploy user whose home is the site's web root. The jail is enforced by the server, and paths are normalized again by the connector: no `..`, no symlinks.
 

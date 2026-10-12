@@ -96,7 +96,10 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       return void res.redirect(302, back.href);
     }
 
-    const ca = await this.d.clientArea.exchange(req.query.code, rid).catch(() => null);
+    const ca = await this.d.clientArea.exchange(req.query.code, rid).catch((e: Error) => {
+      console.error(JSON.stringify({ t: new Date().toISOString(), event: 'client_area_exchange_failed', error: e.message.slice(0, 300) }));
+      return null;
+    });
     const site = ca && (await this.d.sites.byAccount(ca.account_id));
     // Codes issued for approving a publish never become connections.
     if (!ca || ca.scope === 'approve' || !site || site.status !== 'active') {

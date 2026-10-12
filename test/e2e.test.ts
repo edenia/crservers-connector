@@ -644,3 +644,21 @@ describe('import_from_url', () => {
     await c.close();
   });
 });
+
+describe('client area exchange errors', () => {
+  it('logs the client area reason without the code or key', async () => {
+    const { ClientAreaClient } = await import('../src/auth/clientarea.js');
+    const logs: string[] = [];
+    const orig = console.warn;
+    console.warn = (m: string) => logs.push(m);
+    try {
+      const fake = (async () => new Response(JSON.stringify({ error: ['Your IP is not permitted to use this API ID / KEY'], info: [] }), { status: 200 })) as unknown as typeof fetch;
+      const r = await new ClientAreaClient('https://ca.example', 'id', 'sekret-key', fake).exchange('the-code', 'the-rid');
+      expect(r).toBeNull();
+    } finally {
+      console.warn = orig;
+    }
+    expect(logs.join('\n')).toContain('Your IP is not permitted');
+    expect(logs.join('\n')).not.toMatch(/sekret-key|the-code/);
+  });
+});

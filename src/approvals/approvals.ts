@@ -300,7 +300,10 @@ export class ApprovalService {
     // Not a redirect back to /approve: without a session that would start another sign-in.
     if (req.query.error || typeof req.query.code !== 'string') return this.message(res, lang, 400, t.notOwnerTitle, t.expiredBody);
 
-    const ca = await this.d.clientArea.exchange(req.query.code, rid).catch(() => null);
+    const ca = await this.d.clientArea.exchange(req.query.code, rid).catch((e: Error) => {
+      console.error(JSON.stringify({ t: new Date().toISOString(), event: 'client_area_exchange_failed', error: e.message.slice(0, 300) }));
+      return null;
+    });
     if (!ca || ca.scope !== 'approve' || ca.account_id !== found.site.serviceId) return this.message(res, lang, 403, t.notOwnerTitle, t.notOwnerBody);
 
     const session = randomToken(32);

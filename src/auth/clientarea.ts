@@ -34,8 +34,13 @@ export class ClientAreaClient implements ClientAreaApi {
     });
     if (!res.ok) throw new Error(`Client area API HTTP ${res.status}`);
     const j = (await res.json()) as Record<string, unknown>;
-    // Failures carry no detail; any non-success means "start over".
-    if (j.success !== true) return null;
+    // Any non-success means "start over" for the user. Log the client area's reason for operators
+    // (e.g. "Your IP is not permitted to use this API ID / KEY"); it never contains the code or key.
+    if (j.success !== true) {
+      const reason = [j.error, (j as { errors?: unknown }).errors].flat().filter(Boolean).map(String).join('; ').slice(0, 300);
+      console.warn(JSON.stringify({ t: new Date().toISOString(), event: 'client_area_exchange_refused', reason: reason || 'no reason given' }));
+      return null;
+    }
     const scope = j.scope === 'preview' || j.scope === 'publish' || j.scope === 'approve' ? j.scope : null;
     if (typeof j.client_id !== 'number' || typeof j.account_id !== 'number' || typeof j.domain !== 'string' || !scope) {
       throw new Error('Unexpected client area exchange response');

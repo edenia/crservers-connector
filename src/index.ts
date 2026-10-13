@@ -11,7 +11,6 @@ import { AuditLog, PgBlobStore, PgDraftStore, PgReleaseStore } from './deploy/pg
 import { createApp } from './http.js';
 import { PreviewService } from './preview/preview.js';
 import { ApprovalService } from './approvals/approvals.js';
-import { ManageService } from './manage/manage.js';
 import { SiteRepo } from './sites.js';
 
 const cfg = loadConfig();
@@ -42,13 +41,10 @@ const approvals = new ApprovalService({
   pool, sites, core, audit, openFs, preview, clientArea, appName,
   clientAreaUrl: cfg.CLIENT_AREA_URL, reqKey: fromB64url(cfg.REQ_KEY), publicUrl: cfg.PUBLIC_URL,
 });
-const manage = new ManageService({
-  pool, sites, audit, clientArea, appName, revokeGrant: (id) => provider.revokeGrant(id),
-  clientAreaUrl: cfg.CLIENT_AREA_URL, reqKey: fromB64url(cfg.REQ_KEY), publicUrl: cfg.PUBLIC_URL,
-});
+const clientApi = { pool, sites, audit, appName, reqKey: fromB64url(cfg.REQ_KEY), revokeGrant: (id: string) => provider.revokeGrant(id) };
 const mcp = { core, sites, preview, approvals, audit, openFs, appName };
 
-const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp, preview, approvals, manage, events: { pool, sites, reqKey: fromB64url(cfg.REQ_KEY) } });
+const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp, preview, approvals, clientApi, events: { pool, sites, reqKey: fromB64url(cfg.REQ_KEY) } });
 const server = app.listen(cfg.PORT, () => console.log(`crservers-connector listening on :${cfg.PORT} (${cfg.PUBLIC_URL})`));
 
 for (const sig of ['SIGTERM', 'SIGINT'] as const) {

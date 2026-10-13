@@ -14,7 +14,6 @@ import { MemorySiteFs } from '../src/deploy/sitefs.js';
 import { createApp } from '../src/http.js';
 import { PreviewService } from '../src/preview/preview.js';
 import { ApprovalService, approvalReasons } from '../src/approvals/approvals.js';
-import { ManageService } from '../src/manage/manage.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SiteRepo } from '../src/sites.js';
@@ -90,8 +89,8 @@ beforeAll(async () => {
   };
   const mcp = { core, sites, preview, approvals, audit, openFs: async () => siteFs, appName, fetchUrl };
   sitesRepo = sites;
-  const manage = new ManageService({ pool, sites, audit, clientArea, appName, revokeGrant: (id) => provider.revokeGrant(id), clientAreaUrl: CA_URL, reqKey, publicUrl: base });
-  server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals, manage, events: { pool, sites, reqKey } }));
+  const clientApi = { pool, sites, audit, appName, reqKey, revokeGrant: (id: string) => provider.revokeGrant(id) };
+  server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals, clientApi, events: { pool, sites, reqKey } }));
 });
 
 afterAll(async () => {
@@ -759,63 +758,50 @@ describe('automatic site setup', () => {
   });
 });
 
-describe('"Asistente de IA" management page', () => {
-  const cookies = (res: globalThis.Response) => res.headers.getSetCookie().map((c) => c.split(';')[0]!);
-  const postForm = (path: string, body: string, headers: Record<string, string>) =>
-    fetch(`${base}${path}`, { method: 'POST', redirect: 'manual', headers: { 'content-type': 'application/x-www-form-urlencoded', ...headers }, body });
-
-  async function signInToManage(serviceId: number, accountId = serviceId) {
-    const start = await get(`/manage/${serviceId}`);
-    expect(start.status).toBe(302);
-    const loc = new URL(start.headers.get('location')!);
-    const payload = verifyReq(reqKey, loc.searchParams.get('req')!)!;
-    expect(payload).toMatchObject({ purpose: 'approve', service_id: serviceId });
-    const code = `ca-manage-${payload.rid}`;
-    caResults.set(code, { client_id: 12, account_id: accountId, domain: 'uat.example', server_id: '6', scope: 'approve' });
-    const cb = await get(`/oauth/callback?code=${code}&rid=${payload.rid}`, { cookie: cookies(start).find((c) => c.startsWith('crs_mbind='))! });
-    return { cb, session: cookies(cb).find((c) => c.startsWith('crs_manage=')) };
+describe('client-area API for the "Asistente de IA" page', () => {
+  /** What the plugin's crsApi() sends. */
+  async function api(path: string, payload: Record<string, unknown>, opts: { key?: Buffer; nonce?: string } = {}) {
+    const body = JSON.stringify({ ...payload, at: Math.floor(Date.now() / 1000), nonce: opts.nonce ?? randomBytes(12).toString('base64url') });
+    const sig = createHmac('sha256', opts.key ?? reqKey).update(body).digest('base64url');
+    const res = await fetch(`${base}/client-area/api/${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-crs-signature': sig }, body });
+    return { status: res.status, body: (await res.json()) as Record<string, any> };
   }
 
-  it('the owner sees connections and activity, revokes one, and toggles approval', async () => {
+  it('lists connections and activity; revokes one; toggles approval; only signed, single-use requests', async () => {
     const token = await connect('publish');
-    expect((await siteInfo(token)).status).toBe(200);
-
-    const { cb, session } = await signInToManage(15);
-    expect(cb.status).toBe(303);
-    expect(cb.headers.get('location')).toBe('/manage/15');
-    expect(cb.headers.getSetCookie().join()).toContain('Path=/manage/15');
-    const html = await (await get('/manage/15', { cookie: session! })).text();
-    expect(html).toContain('Asistentes de IA con acceso a <strong>uat.example</strong>');
-    expect(html).toContain('<strong>ChatGPT</strong> · Editar y publicar');
-    expect(html).toContain('Quitar acceso');
-    expect(html).toContain('Aprobar cada publicación');
-    expect(html).toMatch(/Publicó la versión #\d+/);
-
-    // Revoke exactly the connection behind `token`.
     const grantId = (await pool.query(`SELECT g.id FROM grants g JOIN tokens t ON t.grant_id = g.id WHERE t.token_hash = encode(sha256($1::bytea), 'hex')`, [token])).rows[0]?.id;
-    expect(grantId).toBeTruthy();
-    expect((await postForm('/manage/15/revoke', `grant=${grantId}`, { cookie: session!, origin: 'https://evil.example' })).status).toBe(403);
-    const rv = await postForm('/manage/15/revoke', `grant=${grantId}`, { cookie: session!, origin: base });
-    expect(rv.status).toBe(303);
-    expect((await siteInfo(token)).status).toBe(401);
-    const after = await (await get('/manage/15?done=revoked', { cookie: session! })).text();
-    expect(after).toContain('Acceso quitado.');
-    expect(after).toContain('Se quitó el acceso a un asistente');
 
-    await postForm('/manage/15/settings', 'approve_every_publish=on', { cookie: session!, 'sec-fetch-site': 'same-origin' });
+    expect((await api('site', { service_id: 15 }, { key: randomBytes(32) })).status).toBe(401);
+    const nonce = randomBytes(12).toString('base64url');
+    const site = await api('site', { service_id: 15 }, { nonce });
+    expect(site.status).toBe(200);
+    expect((await api('site', { service_id: 15 }, { nonce })).status).toBe(409); // replay
+    expect(site.body.site).toMatchObject({ domain: 'uat.example', status: 'active', approve_every_publish: false });
+    const mine = site.body.connections.find((c: Record<string, unknown>) => c.id === grantId);
+    expect(mine).toMatchObject({ app: 'ChatGPT', permission: 'publish', connected_at: expect.any(String) });
+    expect(site.body.activity.some((a: Record<string, unknown>) => a.action === 'publish' && a.app === 'ChatGPT')).toBe(true);
+
+    expect((await api('revoke', { service_id: 15, grant_id: grantId })).body).toMatchObject({ ok: true, revoked: 1 });
+    expect((await siteInfo(token)).status).toBe(401);
+    expect((await api('revoke', { service_id: 77777, grant_id: 'all' })).status).toBe(404);
+
+    expect((await api('settings', { service_id: 15, approve_every_publish: true })).body).toMatchObject({ approve_every_publish: true });
     expect((await sitesRepo.byAccount(15))!.approveEveryPublish).toBe(true);
-    expect(await (await get('/manage/15', { cookie: session! })).text()).toContain('Se activó «Aprobar cada publicación»');
-    await postForm('/manage/15/settings', 'approve_every_publish=off', { cookie: session!, origin: base });
-    expect((await sitesRepo.byAccount(15))!.approveEveryPublish).toBe(false);
+    await api('settings', { service_id: 15, approve_every_publish: false });
+    const after = await api('site', { service_id: 15 });
+    expect(after.body.site.approve_every_publish).toBe(false);
+    expect(after.body.activity.slice(0, 3).map((a: Record<string, unknown>) => a.action)).toEqual(['settings_changed', 'settings_changed', 'connection_revoked']);
+    expect(after.body.activity[0].app).toBe('owner');
+
+    expect((await api('site', { service_id: 424242 })).body).toMatchObject({ ok: true, site: null, connections: [] });
   });
 
-  it('another account cannot sign in; a session only covers its own service', async () => {
-    const other = await signInToManage(15, 999);
-    expect(other.cb.status).toBe(403);
-    expect(other.session).toBeUndefined();
-    const { session } = await signInToManage(15);
-    const elsewhere = await get('/manage/77', { cookie: session! });
-    expect(elsewhere.status).toBe(302); // no session for 77: back to the client area sign-in
-    expect((await postForm('/manage/77/revoke', 'grant=all', { cookie: session!, origin: base })).status).toBe(403);
+  it('revoke "all" ends every connection to the site', async () => {
+    const a = await connect('publish');
+    const b = await connect('preview');
+    const r = await api('revoke', { service_id: 15, grant_id: 'all' });
+    expect(r.body.revoked).toBeGreaterThanOrEqual(2);
+    expect((await siteInfo(a)).status).toBe(401);
+    expect((await siteInfo(b)).status).toBe(401);
   });
 });

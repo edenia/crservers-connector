@@ -10,6 +10,7 @@ import type { SiteRepo } from '../sites.js';
 import type { ClientAreaApi } from './clientarea.js';
 import type { PgClientsStore } from './clients.js';
 import { signReq } from './req.js';
+import { openSiteSetup } from './sitesetup.js';
 import { pickLang, signInErrorPage } from '../ui/page.js';
 
 /**
@@ -100,6 +101,16 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       console.error(JSON.stringify({ t: new Date().toISOString(), event: 'client_area_exchange_failed', error: e.message.slice(0, 300) }));
       return null;
     });
+    if (ca?.site_setup && ca.scope !== 'approve') {
+      // First connection of this site: the client area just created its jailed deploy user.
+      try {
+        const s = openSiteSetup(this.d.reqKey, ca.site_setup);
+        await this.d.sites.upsertSetup({ serviceId: ca.account_id, domain: ca.domain, ftpHost: s.ftpHost, ftpUser: s.ftpUser, ftpPassword: s.ftpPassword });
+        console.log(JSON.stringify({ t: new Date().toISOString(), event: 'site_setup', service_id: ca.account_id, domain: ca.domain }));
+      } catch (e) {
+        console.error(JSON.stringify({ t: new Date().toISOString(), event: 'site_setup_failed', service_id: ca.account_id, error: (e as Error).message }));
+      }
+    }
     const site = ca && (await this.d.sites.byAccount(ca.account_id));
     // Codes issued for approving a publish never become connections.
     if (!ca || ca.scope === 'approve' || !site || site.status !== 'active') {
@@ -181,6 +192,13 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
 
   async revokeToken(client: OAuthClientInformationFull, request: OAuthTokenRevocationRequest): Promise<void> {
     await this.d.pool.query('UPDATE tokens SET revoked_at = now() WHERE token_hash = $1 AND client_id = $2 AND revoked_at IS NULL', [hashToken(request.token), client.client_id]);
+  }
+
+  /** Every connection to a site (service terminated or transferred to another client). */
+  async revokeSite(siteId: string): Promise<number> {
+    const r = await this.d.pool.query('UPDATE grants SET revoked_at = now() WHERE site_id = $1 AND revoked_at IS NULL RETURNING id', [siteId]);
+    for (const g of r.rows) await this.d.pool.query('UPDATE tokens SET revoked_at = now() WHERE grant_id = $1 AND revoked_at IS NULL', [g.id]);
+    return r.rowCount ?? 0;
   }
 
   async revokeGrant(grantId: string): Promise<void> {

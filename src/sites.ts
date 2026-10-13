@@ -41,6 +41,25 @@ export class SiteRepo {
     return { id, serviceId: input.serviceId, domain: input.domain.toLowerCase(), status: 'active', approveEveryPublish: false };
   }
 
+  /**
+   * Automatic setup: registers the site, or replaces its deploy credentials when the client area
+   * created or reset the deploy user. Leaves a frozen site frozen (the lifecycle events decide that).
+   */
+  async upsertSetup(input: { serviceId: number; domain: string; ftpHost: string; ftpUser: string; ftpPassword: string }): Promise<Site> {
+    const r = await this.pool.query(
+      `INSERT INTO sites (id, service_id, domain, ftp_host, ftp_user, ftp_password_enc) VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (service_id) DO UPDATE SET domain = EXCLUDED.domain, ftp_host = EXCLUDED.ftp_host, ftp_user = EXCLUDED.ftp_user, ftp_password_enc = EXCLUDED.ftp_password_enc
+       RETURNING id, service_id, domain, status, approve_every_publish`,
+      [randomUUID(), input.serviceId, input.domain.toLowerCase(), input.ftpHost, input.ftpUser, seal(this.encryptionKey, input.ftpPassword)],
+    );
+    return toSite(r.rows[0]);
+  }
+
+  async setStatus(serviceId: number, status: Site['status']): Promise<Site | undefined> {
+    const r = await this.pool.query('UPDATE sites SET status = $2 WHERE service_id = $1 RETURNING id, service_id, domain, status, approve_every_publish', [serviceId, status]);
+    return r.rows[0] && toSite(r.rows[0]);
+  }
+
   async ftpConfig(siteId: string): Promise<FtpSiteConfig> {
     const r = await this.pool.query('SELECT ftp_host, ftp_user, ftp_password_enc FROM sites WHERE id = $1', [siteId]);
     const row = r.rows[0];

@@ -24,6 +24,25 @@ The connector never sees the client's password.
 4. The client area redirects back with a one-time code. The connector redeems it server-to-server. The client area enforces single use and a 60-second expiry, and re-checks that the client owns the site and that the service is active.
 5. The connector issues its own authorization code back to the AI host, with `iss` (RFC 9207). The binding cookie must match, so nobody can trick a client into linking their site to someone else's AI app.
 
+## Automatic site setup
+
+The connector publishes through a jailed FTP deploy user per site, one that can reach only that site's web root. Nobody creates these by hand:
+
+1. The first time a client connects a site, the client area creates the deploy user on the site's hosting node. It uses the hosting control panel's API with credentials the client area already holds. If the plan's FTP account limit is reached, it raises that one account's limit by one.
+2. The new credentials travel to the connector once, inside the server-to-server code exchange. They are sealed with AES-256-GCM, with a key derived from the shared request-signing key. The connector stores the password with its own encryption key.
+3. **The connector never holds a key for the hosting node,** only the per-site jailed users.
+
+If setup fails, the client sees "we're activating this site, try again in a few minutes", and nothing is half-registered.
+
+The client area also reports what happens to the hosting service, signed with the same shared key and with a timestamp and a single-use nonce:
+
+| Service event | Connector | Deploy user |
+|---|---|---|
+| Suspended | Publishing paused (tools say so) | Suspended |
+| Reactivated | Publishing resumed | Reactivated |
+| Terminated | Paused for good, every connection revoked | Deleted |
+| Transferred to another client | Every connection revoked | Unchanged |
+
 ## Tokens
 
 - Access tokens last 1 hour and are bound to this server's MCP URL. Refresh tokens rotate on every use.

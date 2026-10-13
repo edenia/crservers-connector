@@ -6,6 +6,9 @@ import { mcpHandler, mcpMethodNotAllowed } from './mcp/handler.js';
 import type { McpDeps } from './mcp/tools.js';
 import type { PreviewService } from './preview/preview.js';
 import type { ApprovalService } from './approvals/approvals.js';
+import { clientAreaEvents } from './auth/events.js';
+import type { SiteRepo } from './sites.js';
+import type { Pool } from 'pg';
 import { LOGO_SVG } from './ui/logo.js';
 import { LOGO_PATH, landingPage, pickLang } from './ui/page.js';
 
@@ -18,6 +21,8 @@ export interface AppDeps {
   mcp: McpDeps;
   preview: PreviewService;
   approvals: ApprovalService;
+  /** Lifecycle events from the client area (signed with REQ_KEY). */
+  events?: { pool: Pool; sites: SiteRepo; reqKey: Buffer };
 }
 
 /**
@@ -87,6 +92,13 @@ export function createApp(d: AppDeps): Express {
   app.get('/oauth/callback', (req, res, next) => {
     (async () => ((await d.approvals.ownsRid(req.query.rid)) ? d.approvals.callback(req, res) : d.provider.clientAreaCallback(req, res)))().catch(next);
   });
+
+  if (d.events) {
+    const handler = clientAreaEvents({ ...d.events, provider: d.provider });
+    app.post('/client-area/events', express.raw({ type: 'application/json', limit: '4kb' }), (req, res, next) => {
+      handler(req, res).catch(next);
+    });
+  }
 
   app.get('/approve/:id', (req, res, next) => {
     d.approvals.show(req, res).catch(next);

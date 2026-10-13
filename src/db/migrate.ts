@@ -187,6 +187,18 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       );
     `,
   },
+  {
+    // Replay protection for signed client-area lifecycle events (src/auth/events.ts).
+    id: '006_client_area_events',
+    sql: `
+      CREATE TABLE client_area_events (
+        nonce        text PRIMARY KEY,
+        service_id   integer NOT NULL,
+        event        text NOT NULL,
+        received_at  timestamptz NOT NULL DEFAULT now()
+      );
+    `,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

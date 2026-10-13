@@ -69,7 +69,7 @@ A push to `main` deploys to staging right away. A tag deploys to production. The
 
 ## Registering a site
 
-Sites are registered once a deploy FTP user, jailed to the site's web root, exists on the hosting server. The FTP password is read from stdin:
+Sites register themselves on their first connection (see ARCHITECTURE.md, "Automatic site setup"). Manual registration remains as a fallback, once a deploy FTP user jailed to the site's web root exists on the hosting server. The FTP password is read from stdin:
 
 ```bash
 kubectl -n crservers-connector exec -i deploy/connector -- \

@@ -39,6 +39,7 @@ const siteFs = new MemorySiteFs({ 'index.html': '<h1>Inicio</h1>', 'lotes.html':
 siteFs.close = async () => undefined;
 const caResults = new Map<string, ClientAreaGrant | null>();
 const liveFetches: string[] = [];
+let sitesRepo: SiteRepo;
 const clientArea: ClientAreaApi = { exchange: async (code) => caResults.get(code) ?? null };
 
 beforeAll(async () => {
@@ -87,7 +88,8 @@ beforeAll(async () => {
     return { data: Buffer.from('<!doctype html><p>login</p>'), contentType: 'text/html', finalUrl: url };
   };
   const mcp = { core, sites, preview, approvals, audit, openFs: async () => siteFs, appName, fetchUrl };
-  server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals }));
+  sitesRepo = sites;
+  server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals, events: { pool, sites, reqKey } }));
 });
 
 afterAll(async () => {
@@ -660,5 +662,97 @@ describe('client area exchange errors', () => {
     }
     expect(logs.join('\n')).toContain('Your IP is not permitted');
     expect(logs.join('\n')).not.toMatch(/sekret-key|the-code/);
+  });
+});
+
+import { createCipheriv, createHmac } from 'node:crypto';
+import { siteSetupKey } from '../src/auth/sitesetup.js';
+
+/** What the plugin's sealForConnector() produces. */
+function sealSetup(creds: Record<string, string>): string {
+  const iv = randomBytes(12);
+  const c = createCipheriv('aes-256-gcm', siteSetupKey(reqKey), iv);
+  const ct = Buffer.concat([c.update(JSON.stringify(creds)), c.final()]);
+  return ['v1', iv.toString('base64url'), ct.toString('base64url'), c.getAuthTag().toString('base64url')].join('.');
+}
+
+/** What the plugin's notifyConnector() sends. */
+async function sendEvent(serviceId: number, event: string, opts: { key?: Buffer; at?: number; nonce?: string } = {}) {
+  const body = JSON.stringify({ service_id: serviceId, event, at: opts.at ?? Math.floor(Date.now() / 1000), nonce: opts.nonce ?? randomBytes(12).toString('base64url') });
+  const sig = createHmac('sha256', opts.key ?? reqKey).update(body).digest('base64url');
+  return fetch(`${base}/client-area/events`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-crs-signature': sig }, body });
+}
+
+async function connectWith(grant: ClientAreaGrant): Promise<{ token: string | null; error: string | null }> {
+  const clientId = (sharedClientId ??= await register());
+  const { cookie, verifier, payload } = await startAuthorize(clientId);
+  const code = `ca-setup-${payload.rid}`;
+  caResults.set(code, grant);
+  const back = new URL((await get(`/oauth/callback?code=${code}&rid=${payload.rid}`, { cookie })).headers.get('location')!);
+  if (back.searchParams.get('error')) return { token: null, error: back.searchParams.get('error_description') };
+  const tok = await form('/token', { grant_type: 'authorization_code', code: back.searchParams.get('code')!, code_verifier: verifier, client_id: clientId });
+  return { token: ((await tok.json()) as { access_token: string }).access_token, error: null };
+}
+
+describe('automatic site setup', () => {
+  // Generated: no credential-like literals in the repo.
+  const creds = { ftp_host: 'iwx41.crservers.com', ftp_user: 'crsconnect@nuevo.example', ftp_password: randomBytes(24).toString('base64url') };
+
+  it('a site the connector has never seen is registered on its first connection', async () => {
+    expect(await sitesRepo.byAccount(77)).toBeUndefined();
+    const before = await connectWith({ client_id: 30, account_id: 77, domain: 'nuevo.example', server_id: '6', scope: 'publish' });
+    expect(before.error).toBe('site not enabled for AI publishing yet'); // no setup → still refused
+
+    const { token } = await connectWith({ client_id: 30, account_id: 77, domain: 'nuevo.example', server_id: '6', scope: 'publish', site_setup: sealSetup(creds) });
+    expect(token).toBeTruthy();
+    const site = (await sitesRepo.byAccount(77))!;
+    expect(site).toMatchObject({ domain: 'nuevo.example', status: 'active' });
+    expect(await sitesRepo.ftpConfig(site.id)).toMatchObject({ host: 'iwx41.crservers.com', user: 'crsconnect@nuevo.example', password: creds.ftp_password, secure: true });
+    expect((await siteInfo(token!)).body).toMatchObject({ domain: 'nuevo.example' });
+  });
+
+  it('replaces credentials when the client area resets the deploy user; ignores tampered setups', async () => {
+    const reset = { ...creds, ftp_password: randomBytes(24).toString('base64url') };
+    await connectWith({ client_id: 30, account_id: 77, domain: 'nuevo.example', server_id: '6', scope: 'publish', site_setup: sealSetup(reset) });
+    const site = (await sitesRepo.byAccount(77))!;
+    expect((await sitesRepo.ftpConfig(site.id)).password).toBe(reset.ftp_password);
+
+    const forged = sealSetup(creds).replace(/\.[^.]+$/, '.AAAAAAAAAAAAAAAAAAAAAA');
+    const r = await connectWith({ client_id: 31, account_id: 78, domain: 'otro.example', server_id: '6', scope: 'publish', site_setup: forged });
+    expect(r.error).toBe('site not enabled for AI publishing yet');
+    expect(await sitesRepo.byAccount(78)).toBeUndefined();
+  });
+
+  it('lifecycle events: suspend pauses, unsuspend resumes, terminate revokes; only signed and fresh', async () => {
+    const { token } = await connectWith({ client_id: 30, account_id: 77, domain: 'nuevo.example', server_id: '6', scope: 'publish' });
+    expect((await sendEvent(77, 'suspend', { key: randomBytes(32) })).status).toBe(401);
+    expect((await sendEvent(77, 'suspend', { at: Math.floor(Date.now() / 1000) - 3600 })).status).toBe(401);
+    expect(((await (await sendEvent(77, 'teleport')).json()) as { ok: boolean }).ok).toBe(false);
+
+    const nonce = randomBytes(12).toString('base64url');
+    expect((await sendEvent(77, 'suspend', { nonce })).status).toBe(200);
+    expect(await (await sendEvent(77, 'suspend', { nonce })).json()).toMatchObject({ replay: true });
+    expect((await sitesRepo.byAccount(77))!.status).toBe('frozen');
+    const c = await mcpClient(token!);
+    expect((await call(c, 'get_site_info')).text).toContain('pausada');
+    expect((await connectWith({ client_id: 30, account_id: 77, domain: 'nuevo.example', server_id: '6', scope: 'publish' })).error).toBeTruthy();
+
+    await sendEvent(77, 'unsuspend');
+    expect((await call(c, 'get_site_info')).data).toMatchObject({ domain: 'nuevo.example' });
+
+    await sendEvent(77, 'terminate');
+    expect((await siteInfo(token!)).status).toBe(401);
+    expect((await sitesRepo.byAccount(77))!.status).toBe('frozen');
+    await c.close();
+  });
+
+  it('ownership change revokes connections but leaves the site active', async () => {
+    await sendEvent(77, 'unsuspend');
+    const { token } = await connectWith({ client_id: 30, account_id: 77, domain: 'nuevo.example', server_id: '6', scope: 'publish' });
+    expect((await siteInfo(token!)).status).toBe(200);
+    expect((await sendEvent(77, 'revoke')).status).toBe(200);
+    expect((await siteInfo(token!)).status).toBe(401);
+    expect((await sitesRepo.byAccount(77))!.status).toBe('active');
+    expect((await sendEvent(999999, 'suspend')).status).toBe(200); // unknown service: accepted, ignored
   });
 });

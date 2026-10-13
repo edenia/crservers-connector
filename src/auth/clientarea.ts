@@ -10,6 +10,8 @@ export interface ClientAreaGrant {
   server_id: string;
   /** preview / publish: a new connection. approve: the site owner signed in to approve one publish. */
   scope: 'preview' | 'publish' | 'approve';
+  /** First connection of a site: its new deploy user's credentials, sealed (see sitesetup.ts). */
+  site_setup?: string;
 }
 
 export interface ClientAreaApi {
@@ -45,6 +47,9 @@ export class ClientAreaClient implements ClientAreaApi {
     if (typeof j.client_id !== 'number' || typeof j.account_id !== 'number' || typeof j.domain !== 'string' || !scope) {
       throw new Error('Unexpected client area exchange response');
     }
-    return { client_id: j.client_id, account_id: j.account_id, domain: j.domain, server_id: String(j.server_id ?? ''), scope };
+    return {
+      client_id: j.client_id, account_id: j.account_id, domain: j.domain, server_id: String(j.server_id ?? ''), scope,
+      ...(typeof j.site_setup === 'string' && j.site_setup ? { site_setup: j.site_setup } : {}),
+    };
   }
 }

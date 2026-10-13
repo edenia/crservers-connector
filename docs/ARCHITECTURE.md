@@ -45,12 +45,18 @@ The client area also reports what happens to the hosting service, signed with th
 
 ## Managing connections
 
-Clients manage access from the client area's **Asistente de IA** page. It lists their sites, each with a **Gestionar** button that opens `/manage/<service>` on the connector. The client signs in through the client area, with the same owner check as the approval link, and sees:
-- every AI assistant connected to the site: app, permission, when it was connected and last used, and a button to **remove its access**. Removing access revokes the connection and its tokens on the connector, which ends it for sure. Disconnecting inside ChatGPT or Claude only makes the app forget its tokens.
+Clients manage access on the **Asistente de IA** page inside the client area. It's rendered with the client area's own theme and linked from its sidebar and from each eligible hosting service's menu. For each site it shows:
+- every AI assistant connected to it: app, permission, when it was connected and last used, and a button to **remove its access**. Removing access revokes the connection and its tokens on the connector, which ends it for sure. Disconnecting inside ChatGPT or Claude only makes the app forget its tokens.
 - recent activity: drafts, publishes, undos, approvals, removed connections, settings changes, and which app did each;
 - the **Aprobar cada publicación** switch.
 
-The session is a cookie scoped to that one service's page (30 minutes, same-site only), and every form post also checks its origin.
+The client area checks that the signed-in client owns the service, then calls the connector's client-area API server to server. Requests are signed with the shared request-signing key and carry a timestamp and a single-use nonce:
+
+| Endpoint | Body | Returns |
+|---|---|---|
+| `POST /client-area/api/site` | `service_id` | site, connections, recent activity |
+| `POST /client-area/api/revoke` | `service_id`, `grant_id` or `"all"` | number revoked |
+| `POST /client-area/api/settings` | `service_id`, `approve_every_publish` | the new value |
 
 ## Tokens
 

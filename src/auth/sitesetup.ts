@@ -46,8 +46,11 @@ export interface SignedEvent {
 
 const MAX_SKEW_S = 300;
 
-/** Verifies X-Crs-Signature (HMAC-SHA256 of the raw body with REQ_KEY) and freshness. */
-export function verifyEvent(reqKey: Buffer, body: Buffer, signature: string, nowSec = Math.floor(Date.now() / 1000)): SignedEvent | null {
+/**
+ * A signed request from the client area: X-Crs-Signature is HMAC-SHA256 of the raw body with
+ * REQ_KEY; the body is JSON with `at` (unix seconds, ±5 min) and `nonce`. Returns the body or null.
+ */
+export function verifySigned(reqKey: Buffer, body: Buffer, signature: string, nowSec = Math.floor(Date.now() / 1000)): (Record<string, unknown> & { nonce: string }) | null {
   if (!signature || !safeEqual(hmac(reqKey, body.toString('utf8')), fromB64url(signature))) return null;
   let j: Record<string, unknown>;
   try {
@@ -55,11 +58,20 @@ export function verifyEvent(reqKey: Buffer, body: Buffer, signature: string, now
   } catch {
     return null;
   }
+  if (!j || typeof j !== 'object') return null;
   const at = Number(j.at);
   if (!Number.isFinite(at) || Math.abs(nowSec - at) > MAX_SKEW_S) return null;
+  if (typeof j.nonce !== 'string' || j.nonce.length < 8) return null;
+  return j as Record<string, unknown> & { nonce: string };
+}
+
+/** Verifies a lifecycle event (see verifySigned). */
+export function verifyEvent(reqKey: Buffer, body: Buffer, signature: string, nowSec = Math.floor(Date.now() / 1000)): SignedEvent | null {
+  const j = verifySigned(reqKey, body, signature, nowSec);
+  if (!j) return null;
   const event = j.event;
   if (event !== 'suspend' && event !== 'unsuspend' && event !== 'terminate' && event !== 'revoke') return null;
   const serviceId = Number(j.service_id);
-  if (!Number.isInteger(serviceId) || serviceId <= 0 || typeof j.nonce !== 'string' || j.nonce.length < 8) return null;
+  if (!Number.isInteger(serviceId) || serviceId <= 0) return null;
   return { serviceId, event, nonce: j.nonce };
 }

@@ -7,6 +7,7 @@ import type { McpDeps } from './mcp/tools.js';
 import type { PreviewService } from './preview/preview.js';
 import type { ApprovalService } from './approvals/approvals.js';
 import { clientAreaEvents } from './auth/events.js';
+import type { ManageService } from './manage/manage.js';
 import type { SiteRepo } from './sites.js';
 import type { Pool } from 'pg';
 import { LOGO_SVG } from './ui/logo.js';
@@ -21,6 +22,7 @@ export interface AppDeps {
   mcp: McpDeps;
   preview: PreviewService;
   approvals: ApprovalService;
+  manage?: ManageService;
   /** Lifecycle events from the client area (signed with REQ_KEY). */
   events?: { pool: Pool; sites: SiteRepo; reqKey: Buffer };
 }
@@ -90,7 +92,11 @@ export function createApp(d: AppDeps): Express {
 
   // One callback for both client-area round trips: new connections and approval sign-ins.
   app.get('/oauth/callback', (req, res, next) => {
-    (async () => ((await d.approvals.ownsRid(req.query.rid)) ? d.approvals.callback(req, res) : d.provider.clientAreaCallback(req, res)))().catch(next);
+    (async () => {
+      if (await d.approvals.ownsRid(req.query.rid)) return d.approvals.callback(req, res);
+      if (d.manage && (await d.manage.ownsRid(req.query.rid))) return d.manage.callback(req, res);
+      return d.provider.clientAreaCallback(req, res);
+    })().catch(next);
   });
 
   if (d.events) {
@@ -98,6 +104,14 @@ export function createApp(d: AppDeps): Express {
     app.post('/client-area/events', express.raw({ type: 'application/json', limit: '4kb' }), (req, res, next) => {
       handler(req, res).catch(next);
     });
+  }
+
+  if (d.manage) {
+    const m = d.manage;
+    const form = express.urlencoded({ extended: false, limit: '4kb' });
+    app.get('/manage/:serviceId', (req, res, next) => void m.show(req, res).catch(next));
+    app.post('/manage/:serviceId/revoke', form, (req, res, next) => void m.revoke(req, res).catch(next));
+    app.post('/manage/:serviceId/settings', form, (req, res, next) => void m.settings(req, res).catch(next));
   }
 
   app.get('/approve/:id', (req, res, next) => {

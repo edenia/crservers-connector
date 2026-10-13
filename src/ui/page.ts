@@ -67,6 +67,11 @@ ul.files{margin:0;padding-left:20px;font-size:.875rem;overflow-wrap:anywhere}
 button.btn{font:inherit;font-weight:700;cursor:pointer}
 .btn.secondary{background:#fff;color:var(--interface);border-color:var(--interface);box-shadow:none}
 .btn.secondary:hover{background:var(--page)}
+ul.rows,ul.activity{list-style:none;margin:8px 0 12px;padding:0}
+li.row{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap;padding:12px 0;border-bottom:1px solid #e4e7ec}
+ul.activity li{padding:8px 0;border-bottom:1px solid #f0f2f5}
+.notice{background:#e6f4ff;border-radius:var(--r-control);padding:10px 12px}
+form{margin:0}
 `;
 
 export const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);

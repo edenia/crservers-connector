@@ -222,14 +222,16 @@ describe('authorization code flow', () => {
   it('serves branded HTML for the landing page and sign-in errors', async () => {
     const home = await get('/');
     expect(home.headers.get('content-type')).toContain('text/html');
-    expect(await home.text()).toContain('Conector de IA de CR Servers');
+    const homeHtml = await home.text();
+    expect(homeHtml).toContain('CR Servers AI Connect');
+    expect(homeHtml).toContain('lang="es"');
     const bad = await get('/oauth/callback?code=x&rid=nope');
     expect(bad.status).toBe(400);
     expect(await bad.text()).toContain('La solicitud expiró');
     const en = await get('/', { 'accept-language': 'en-US,en;q=0.9,es;q=0.5' });
-    expect(await en.text()).toContain('CR Servers AI connector');
+    expect(await en.text()).toContain('lang="en"');
     const esPref = await get('/', { 'accept-language': 'es-CR,es;q=0.9,en;q=0.8' });
-    expect(await esPref.text()).toContain('Conector de IA de CR Servers');
+    expect(await esPref.text()).toContain('lang="es"');
     const enErr = await get('/oauth/callback?code=x&rid=nope', { 'accept-language': 'en' });
     expect(await enErr.text()).toContain('This request expired');
   });
@@ -758,7 +760,7 @@ describe('automatic site setup', () => {
   });
 });
 
-describe('client-area API for the "Asistente de IA" page', () => {
+describe('client-area API for the AI Connect page', () => {
   /** What the plugin's crsApi() sends. */
   async function api(path: string, payload: Record<string, unknown>, opts: { key?: Buffer; nonce?: string } = {}) {
     const body = JSON.stringify({ ...payload, at: Math.floor(Date.now() / 1000), nonce: opts.nonce ?? randomBytes(12).toString('base64url') });

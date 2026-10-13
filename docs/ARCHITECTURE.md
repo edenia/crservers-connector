@@ -45,7 +45,7 @@ The client area also reports what happens to the hosting service, signed with th
 
 ## Managing connections
 
-Clients manage access on the **Asistente de IA** page inside the client area. It's rendered with the client area's own theme and linked from its sidebar and from each eligible hosting service's menu. For each site it shows:
+Clients manage access on the **AI Connect** page inside the client area. It's rendered with the client area's own theme and linked from its sidebar and from each eligible hosting service's menu. For each site it shows:
 - every AI assistant connected to it: app, permission, when it was connected and last used, and a button to **remove its access**. Removing access revokes the connection and its tokens on the connector, which ends it for sure. Disconnecting inside ChatGPT or Claude only makes the app forget its tokens.
 - recent activity: drafts, publishes, undos, approvals, removed connections, settings changes, and which app did each;
 - the **Aprobar cada publicación** switch.

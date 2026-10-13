@@ -2,7 +2,7 @@
   <a href="https://crservers.com"><img src="docs/assets/crservers-logo.svg" alt="CR Servers" width="280"></a>
 </p>
 
-# CR Servers · Conector de IA
+# CR Servers · AI Connect
 
 [![CI](https://github.com/edenia/crservers-connector/actions/workflows/ci.yml/badge.svg)](https://github.com/edenia/crservers-connector/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
@@ -11,7 +11,7 @@
 
 *Your website, managed by your AI assistant. [English below.](#english)*
 
-> **Estado: piloto.** Estamos probando el conector con un grupo pequeño de clientes. Todavía no está disponible para todas las cuentas.
+> **Estado: piloto.** Estamos probando AI Connect con un grupo pequeño de clientes. Todavía no está disponible para todas las cuentas.
 
 ---
 
@@ -23,7 +23,7 @@ Para dueños de negocios y profesionales con hospedaje en CR Servers que ya usan
 
 ### Cómo funciona
 
-1. **Conecte su asistente.** En Claude o ChatGPT agregue el conector de CR Servers.
+1. **Conecte su asistente.** En Claude o ChatGPT agregue CR Servers AI Connect.
 2. **Autorice en su área de clientes.** Inicia sesión en el área de clientes de CR Servers, como siempre, y elige qué sitio puede tocar el asistente. Su contraseña nunca pasa por el asistente.
 3. **Pida el cambio.** Por ejemplo: *"Cambie el precio del lote de 1000 m² a $45.000 y agregue estas fotos."* El asistente prepara un borrador; su sitio no cambia todavía.
 4. **Revise y confirme.** El asistente le muestra qué va a cambiar y espera su confirmación antes de publicar.
@@ -53,7 +53,7 @@ Escríbanos desde [crservers.com](https://crservers.com). Le atiende nuestro equ
 
 ## English
 
-**CR Servers AI connector** lets a hosting client's own AI assistant (Claude, ChatGPT) publish and maintain their website safely. It's a remote [MCP](https://modelcontextprotocol.io) server with its own OAuth 2.1 authorization server. Sign-in happens in the CR Servers client area, so no password ever reaches the AI.
+**CR Servers AI Connect** lets a hosting client's own AI assistant (Claude, ChatGPT) publish and maintain their website safely. It's a remote [MCP](https://modelcontextprotocol.io) server with its own OAuth 2.1 authorization server. Sign-in happens in the CR Servers client area, so no password ever reaches the AI.
 
 > **Status: pilot.** Not yet generally available to all CR Servers accounts.
 

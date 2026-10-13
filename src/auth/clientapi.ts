@@ -6,7 +6,7 @@ import { verifySigned } from './sitesetup.js';
 
 /**
  * Client-area API (docs/ARCHITECTURE.md, "Managing connections"): what the client area's
- * "Asistente de IA" page shows and changes. Called server-to-server by the client-area extension,
+ * AI Connect page shows and changes. Called server-to-server by the client-area extension,
  * signed with REQ_KEY (same scheme as lifecycle events). The client area has already checked that
  * the signed-in client owns the service; this API trusts that, as it trusts the code exchange.
  *

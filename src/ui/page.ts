@@ -12,7 +12,7 @@ const T = {
   es: {
     help: '¿Necesita ayuda?',
     helpUrl: 'https://crservers.com/es/contacto',
-    landingTitle: 'Conector de IA de CR Servers',
+    landingTitle: 'CR Servers AI Connect',
     landingBody: 'Permite que su asistente de IA (Claude, ChatGPT) actualice su sitio web en CR Servers, con vista previa antes de publicar y la posibilidad de deshacer cada cambio.',
     address: 'Dirección del conector:',
     how: 'Cómo funciona',
@@ -22,7 +22,7 @@ const T = {
   en: {
     help: 'Need help?',
     helpUrl: 'https://crservers.com/contact',
-    landingTitle: 'CR Servers AI connector',
+    landingTitle: 'CR Servers AI Connect',
     landingBody: 'Lets your AI assistant (Claude, ChatGPT) update your CR Servers website, with a preview before publishing and one-step undo for every change.',
     address: 'Connector address:',
     how: 'How it works',

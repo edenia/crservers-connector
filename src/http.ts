@@ -22,7 +22,7 @@ export interface AppDeps {
   mcp: McpDeps;
   preview: PreviewService;
   approvals: ApprovalService;
-  /** Data for the client area's "Asistente de IA" page (signed with REQ_KEY). */
+  /** Data for the client area's AI Connect page (signed with REQ_KEY). */
   clientApi?: ClientApiDeps;
   /** Lifecycle events from the client area (signed with REQ_KEY). */
   events?: { pool: Pool; sites: SiteRepo; reqKey: Buffer };

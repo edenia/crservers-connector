@@ -43,7 +43,7 @@ const approvals = new ApprovalService({
 });
 const mcp = { core, sites, preview, approvals, audit, openFs, appName };
 
-const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp, preview, approvals });
+const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp, preview, approvals, events: { pool, sites, reqKey: fromB64url(cfg.REQ_KEY) } });
 const server = app.listen(cfg.PORT, () => console.log(`crservers-connector listening on :${cfg.PORT} (${cfg.PUBLIC_URL})`));
 
 for (const sig of ['SIGTERM', 'SIGINT'] as const) {

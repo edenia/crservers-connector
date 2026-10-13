@@ -317,11 +317,11 @@ export class ApprovalService {
   }
 }
 
-function noStore(res: Response): void {
+export function noStore(res: Response): void {
   res.set({ 'cache-control': 'no-store', 'x-robots-tag': 'noindex, nofollow', 'referrer-policy': 'same-origin', 'x-frame-options': 'DENY', 'content-security-policy': "frame-ancestors 'none'" });
 }
 
-function readCookie(header: string | undefined, name: string): string {
+export function readCookie(header: string | undefined, name: string): string {
   for (const part of (header ?? '').split(';')) {
     const i = part.indexOf('=');
     if (i > 0 && part.slice(0, i).trim() === name) return decodeURIComponent(part.slice(i + 1).trim());

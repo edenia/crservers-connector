@@ -199,6 +199,26 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       );
     `,
   },
+  {
+    // "Asistente de IA" management page (src/manage/manage.ts): owner sign-ins and sessions.
+    id: '007_manage',
+    sql: `
+      CREATE TABLE manage_signins (
+        rid          text PRIMARY KEY,
+        service_id   integer NOT NULL,
+        binding_hash text NOT NULL,
+        expires_at   timestamptz NOT NULL,
+        used_at      timestamptz
+      );
+      CREATE TABLE manage_sessions (
+        token_hash        text PRIMARY KEY,
+        service_id        integer NOT NULL,
+        account_holder_id integer NOT NULL,
+        created_at        timestamptz NOT NULL DEFAULT now(),
+        expires_at        timestamptz NOT NULL
+      );
+    `,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

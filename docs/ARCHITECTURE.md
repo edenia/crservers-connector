@@ -43,6 +43,15 @@ The client area also reports what happens to the hosting service, signed with th
 | Terminated | Paused for good, every connection revoked | Deleted |
 | Transferred to another client | Every connection revoked | Unchanged |
 
+## Managing connections
+
+Clients manage access from the client area's **Asistente de IA** page. It lists their sites, each with a **Gestionar** button that opens `/manage/<service>` on the connector. The client signs in through the client area, with the same owner check as the approval link, and sees:
+- every AI assistant connected to the site: app, permission, when it was connected and last used, and a button to **remove its access**. Removing access revokes the connection and its tokens on the connector, which ends it for sure. Disconnecting inside ChatGPT or Claude only makes the app forget its tokens.
+- recent activity: drafts, publishes, undos, approvals, removed connections, settings changes, and which app did each;
+- the **Aprobar cada publicación** switch.
+
+The session is a cookie scoped to that one service's page (30 minutes, same-site only), and every form post also checks its origin.
+
 ## Tokens
 
 - Access tokens last 1 hour and are bound to this server's MCP URL. Refresh tokens rotate on every use.

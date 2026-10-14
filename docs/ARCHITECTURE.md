@@ -128,6 +128,22 @@ When it's on, `publish` doesn't go live. It returns an approval link for the AI 
 | `read_file` | 20,000-character pages |
 | Undo history | Last 5 releases per site |
 
+## Data retention
+
+A daily job deletes what's past its period (`src/db/cleanup.ts`). The public privacy policy states the same periods, so change both together.
+
+| Data | Kept |
+|---|---|
+| Drafts and their staged files | Until published or discarded, at most 24 hours |
+| Preview links | 1 hour |
+| Undo copies | The last 5 publishes per site |
+| Activity log | 12 months |
+| Connections (grants) and their tokens | While active; deleted 90 days after revocation |
+| Expired tokens | Deleted a day after expiry |
+| Sign-in requests, one-time codes, owner sign-ins, event nonces | Deleted a day after expiry |
+| Approval requests | 90 days after the decision or expiry |
+| Request logs (stdout) | Rotated by size on the node; IP addresses are anonymized before logging, so they hold no personal data |
+
 ## Operations
 
 - **Hosting:** runs on Kubernetes as a single stateless app (one replica for now) with its own Postgres.

@@ -868,3 +868,35 @@ describe('ChatGPT directory readiness', () => {
     expect(await res.text()).toBe('test-challenge-token');
   });
 });
+
+describe('edit_file removals', () => {
+  it('removes text with an empty or omitted replacement', async () => {
+    siteFs.put('quitar.html', '<h1>Hola</h1><h2>hello leister hello helbertson</h2><p>fin</p>');
+    const c = await mcpClient(await connect('publish'));
+    const { data: draft } = await call(c, 'start_changeset');
+    const empty = await call(c, 'edit_file', { changeset_id: draft.changeset_id, path: 'quitar.html', edits: [{ old_text: '<h2>hello leister hello helbertson</h2>', new_text: '' }] });
+    expect(empty.isError).toBe(false);
+    expect((await call(c, 'read_file', { path: 'quitar.html', changeset_id: draft.changeset_id })).data.text).toBe('<h1>Hola</h1><p>fin</p>');
+    const omitted = await call(c, 'edit_file', { changeset_id: draft.changeset_id, path: 'quitar.html', edits: [{ old_text: '<p>fin</p>' }] });
+    expect(omitted.isError).toBe(false);
+    expect((await call(c, 'read_file', { path: 'quitar.html', changeset_id: draft.changeset_id })).data.text).toBe('<h1>Hola</h1>');
+    // The tool-call log line sees each call's outcome.
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (m: string) => logs.push(m);
+    try {
+      await call(c, 'edit_file', { changeset_id: draft.changeset_id, path: 'quitar.html', edits: [{ old_text: 'no existe' }] });
+      await call(c, 'list_sites');
+    } finally {
+      console.log = orig;
+    }
+    const lines = logs.filter((l) => l.includes('"tool_call"')).map((l) => JSON.parse(l));
+    expect(lines).toEqual([
+      expect.objectContaining({ tool: 'edit_file', ok: false, error: expect.stringContaining('0') }),
+      expect.objectContaining({ tool: 'list_sites', ok: true }),
+    ]);
+    expect(JSON.stringify(lines)).not.toContain('quitar.html');
+    await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
+    await c.close();
+  });
+});

@@ -13,6 +13,7 @@ export function mcpHandler(deps: McpDeps) {
       return;
     }
     const server = buildMcpServer(deps, req.auth);
+    logToolCalls(req, res);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
       void transport.close();
@@ -27,6 +28,54 @@ export function mcpHandler(deps: McpDeps) {
     }
   };
 }
+
+/**
+ * One log line per tools/call: tool name, duration, and on failure the error message (our own
+ * text, or the SDK's input validation error). Never arguments or results: those carry site content.
+ */
+function logToolCalls(req: Request, res: Response): void {
+  const msgs = (Array.isArray(req.body) ? req.body : [req.body]) as { method?: string; id?: unknown; params?: { name?: unknown } }[];
+  const calls = new Map(msgs.filter((m) => m?.method === 'tools/call').map((m) => [String(m.id), String(m.params?.name ?? '')]));
+  if (!calls.size) return;
+  const start = Date.now();
+  // The SDK may write the body in pieces (or as a text/event-stream); collect everything.
+  const chunks: Buffer[] = [];
+  const collect = (c: unknown) => {
+    if (typeof c === 'string') chunks.push(Buffer.from(c));
+    else if (c instanceof Uint8Array) chunks.push(Buffer.from(c));
+  };
+  const write = res.write.bind(res) as (...a: unknown[]) => boolean;
+  res.write = ((chunk: unknown, ...rest: unknown[]) => {
+    collect(chunk);
+    return write(chunk, ...rest);
+  }) as typeof res.write;
+  const end = res.end.bind(res) as (...a: unknown[]) => Response;
+  res.end = ((chunk?: unknown, ...rest: unknown[]) => {
+    collect(chunk);
+    try {
+      const text = Buffer.concat(chunks).toString('utf8');
+      // JSON body, or SSE: "data: {...}" lines.
+      const bodies = text.trimStart().startsWith('{') || text.trimStart().startsWith('[') ? [text] : text.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5));
+      const replies = bodies.flatMap((b) => {
+        try {
+          return ([] as Reply[]).concat(JSON.parse(b));
+        } catch {
+          return [];
+        }
+      });
+      for (const [id, tool] of calls) {
+        const r = replies.find((x) => String(x.id) === id);
+        const error = r?.error?.message ?? (r?.result?.isError ? String(r.result.content?.[0]?.text ?? '').split('\n')[0] : undefined);
+        console.log(JSON.stringify({ t: new Date().toISOString(), event: 'tool_call', tool, ms: Date.now() - start, ok: Boolean(r) && !error, ...(error ? { error: error.slice(0, 200) } : {}), ...(r ? {} : { note: 'no reply' }) }));
+      }
+    } catch {
+      // Logging must never break a response.
+    }
+    return end(chunk, ...rest);
+  }) as typeof res.end;
+}
+
+type Reply = { id?: unknown; result?: { isError?: boolean; content?: { text?: string }[] }; error?: { message?: string } };
 
 /** GET (SSE stream) and DELETE (session end) aren't used in stateless mode. */
 export function mcpMethodNotAllowed(_req: Request, res: Response): void {

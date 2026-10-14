@@ -38,11 +38,31 @@ function logToolCalls(req: Request, res: Response): void {
   const calls = new Map(msgs.filter((m) => m?.method === 'tools/call').map((m) => [String(m.id), String(m.params?.name ?? '')]));
   if (!calls.size) return;
   const start = Date.now();
+  // The SDK may write the body in pieces (or as a text/event-stream); collect everything.
+  const chunks: Buffer[] = [];
+  const collect = (c: unknown) => {
+    if (typeof c === 'string') chunks.push(Buffer.from(c));
+    else if (c instanceof Uint8Array) chunks.push(Buffer.from(c));
+  };
+  const write = res.write.bind(res) as (...a: unknown[]) => boolean;
+  res.write = ((chunk: unknown, ...rest: unknown[]) => {
+    collect(chunk);
+    return write(chunk, ...rest);
+  }) as typeof res.write;
   const end = res.end.bind(res) as (...a: unknown[]) => Response;
   res.end = ((chunk?: unknown, ...rest: unknown[]) => {
+    collect(chunk);
     try {
-      const text = typeof chunk === 'string' ? chunk : Buffer.isBuffer(chunk) ? chunk.toString('utf8') : '';
-      const replies = text ? ([] as { id?: unknown; result?: { isError?: boolean; content?: { text?: string }[] }; error?: { message?: string } }[]).concat(JSON.parse(text)) : [];
+      const text = Buffer.concat(chunks).toString('utf8');
+      // JSON body, or SSE: "data: {...}" lines.
+      const bodies = text.trimStart().startsWith('{') || text.trimStart().startsWith('[') ? [text] : text.split('\n').filter((l) => l.startsWith('data:')).map((l) => l.slice(5));
+      const replies = bodies.flatMap((b) => {
+        try {
+          return ([] as Reply[]).concat(JSON.parse(b));
+        } catch {
+          return [];
+        }
+      });
       for (const [id, tool] of calls) {
         const r = replies.find((x) => String(x.id) === id);
         const error = r?.error?.message ?? (r?.result?.isError ? String(r.result.content?.[0]?.text ?? '').split('\n')[0] : undefined);
@@ -51,9 +71,11 @@ function logToolCalls(req: Request, res: Response): void {
     } catch {
       // Logging must never break a response.
     }
-    return end(chunk as never, ...(rest as never[]));
+    return end(chunk, ...rest);
   }) as typeof res.end;
 }
+
+type Reply = { id?: unknown; result?: { isError?: boolean; content?: { text?: string }[] }; error?: { message?: string } };
 
 /** GET (SSE stream) and DELETE (session end) aren't used in stateless mode. */
 export function mcpMethodNotAllowed(_req: Request, res: Response): void {

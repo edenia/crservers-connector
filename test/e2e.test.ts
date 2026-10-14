@@ -210,6 +210,20 @@ describe('authorization code flow', () => {
     expect((await siteInfo(t2.access_token)).status).toBe(401);
   });
 
+  it('issues a refresh token even when the client asks only for "site" (ChatGPT does)', async () => {
+    const clientId = await register();
+    const { cookie, verifier, payload } = await startAuthorize(clientId, 'site');
+    caResults.set('ca-site-only', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
+    const back = new URL((await get(`/oauth/callback?code=ca-site-only&rid=${payload.rid}`, { cookie })).headers.get('location')!);
+    const tok = await form('/token', { grant_type: 'authorization_code', code: back.searchParams.get('code')!, code_verifier: verifier, client_id: clientId });
+    const t = (await tok.json()) as { access_token: string; refresh_token?: string; scope: string };
+    expect(t.refresh_token).toBeTruthy();
+    expect(t.scope).toBe('site offline_access');
+    const r = await form('/token', { grant_type: 'refresh_token', refresh_token: t.refresh_token!, client_id: clientId });
+    expect(r.status).toBe(200);
+    expect((await siteInfo(((await r.json()) as { access_token: string }).access_token)).status).toBe(200);
+  });
+
   it('wrong PKCE verifier is refused', async () => {
     const clientId = await register();
     const { cookie, payload } = await startAuthorize(clientId);

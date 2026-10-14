@@ -120,7 +120,10 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     }
 
     const grantId = randomUUID();
-    const scopes = ['site', ...((ar.scopes as string[]).includes('offline_access') ? ['offline_access'] : [])];
+    // Always grant offline_access: ChatGPT doesn't request it, and without a refresh token every
+    // connection silently dies when its 1-hour access token expires. Refresh tokens rotate, reuse
+    // revokes the connection, they expire after 90 idle days, and the owner can revoke them.
+    const scopes = ['site', 'offline_access'];
     await this.d.pool.query(
       `INSERT INTO grants (id, client_id, account_holder_id, site_id, permission, scopes, resource) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [grantId, ar.client_id, ca.client_id, site.id, ca.scope as 'preview' | 'publish', scopes, this.d.mcpUrl],
@@ -215,14 +218,13 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       [hashToken(access), grantId, clientId, ACCESS_TTL_S],
     );
     const tokens: OAuthTokens = { access_token: access, token_type: 'Bearer', expires_in: ACCESS_TTL_S, scope: (g.scopes as string[]).join(' ') };
-    if ((g.scopes as string[]).includes('offline_access')) {
-      const refresh = randomToken(32);
-      await this.d.pool.query(
-        `INSERT INTO tokens (token_hash, kind, grant_id, client_id, expires_at) VALUES ($1, 'refresh', $2, $3, now() + make_interval(secs => $4))`,
-        [hashToken(refresh), grantId, clientId, REFRESH_IDLE_S],
-      );
-      tokens.refresh_token = refresh;
-    }
+    // Always (also for connections made before every grant included offline_access).
+    const refresh = randomToken(32);
+    await this.d.pool.query(
+      `INSERT INTO tokens (token_hash, kind, grant_id, client_id, expires_at) VALUES ($1, 'refresh', $2, $3, now() + make_interval(secs => $4))`,
+      [hashToken(refresh), grantId, clientId, REFRESH_IDLE_S],
+    );
+    tokens.refresh_token = refresh;
     return tokens;
   }
 }

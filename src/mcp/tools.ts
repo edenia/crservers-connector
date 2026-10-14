@@ -193,7 +193,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       inputSchema: {
         changeset_id: z.string(),
         path: z.string(),
-        edits: z.array(z.object({ old_text: z.string().min(1), new_text: z.string() })).min(1).max(20),
+        edits: z.array(z.object({ old_text: z.string().min(1), new_text: z.string().nullish().describe('Replacement; empty or omitted removes old_text') })).min(1).max(20),
         base_hash: z.string().optional().describe('Hash from read_file, to detect changes made since you read it'),
       },
       annotations: DRAFT,
@@ -208,7 +208,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
         for (const [i, e] of a.edits.entries()) {
           const n = text.split(e.old_text).length - 1;
           if (n !== 1) return fail(`Edición ${i + 1}: el texto buscado aparece ${n} veces; debe aparecer exactamente 1. / Edit ${i + 1}: old_text found ${n} times, must be exactly 1.`);
-          text = text.replace(e.old_text, () => e.new_text);
+          text = text.replace(e.old_text, () => e.new_text ?? '');
         }
         const [res] = await deps.core.writeFiles(a.changeset_id, site.id, f, [{ path: cur.path, content: Buffer.from(text, 'utf8') }]);
         if (!res?.ok) return fail(res?.error ?? 'No se pudo editar. / Edit failed.');

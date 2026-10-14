@@ -868,3 +868,19 @@ describe('ChatGPT directory readiness', () => {
     expect(await res.text()).toBe('test-challenge-token');
   });
 });
+
+describe('edit_file removals', () => {
+  it('removes text with an empty or omitted replacement', async () => {
+    siteFs.put('quitar.html', '<h1>Hola</h1><h2>hello leister hello helbertson</h2><p>fin</p>');
+    const c = await mcpClient(await connect('publish'));
+    const { data: draft } = await call(c, 'start_changeset');
+    const empty = await call(c, 'edit_file', { changeset_id: draft.changeset_id, path: 'quitar.html', edits: [{ old_text: '<h2>hello leister hello helbertson</h2>', new_text: '' }] });
+    expect(empty.isError).toBe(false);
+    expect((await call(c, 'read_file', { path: 'quitar.html', changeset_id: draft.changeset_id })).data.text).toBe('<h1>Hola</h1><p>fin</p>');
+    const omitted = await call(c, 'edit_file', { changeset_id: draft.changeset_id, path: 'quitar.html', edits: [{ old_text: '<p>fin</p>' }] });
+    expect(omitted.isError).toBe(false);
+    expect((await call(c, 'read_file', { path: 'quitar.html', changeset_id: draft.changeset_id })).data.text).toBe('<h1>Hola</h1>');
+    await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
+    await c.close();
+  });
+});

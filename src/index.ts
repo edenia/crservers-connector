@@ -5,6 +5,7 @@ import { ConnectorOAuthProvider } from './auth/provider.js';
 import { loadConfig } from './config.js';
 import { fromB64url } from './crypto.js';
 import { migrate } from './db/migrate.js';
+import { scheduleCleanup } from './db/cleanup.js';
 import { DeployCore } from './deploy/core.js';
 import { FtpSiteFs } from './deploy/ftpfs.js';
 import { AuditLog, PgBlobStore, PgDraftStore, PgReleaseStore } from './deploy/pgstores.js';
@@ -17,6 +18,7 @@ const cfg = loadConfig();
 const pool = new pg.Pool({ connectionString: cfg.DATABASE_URL, max: 10 });
 const applied = await migrate(pool);
 if (applied.length) console.log(`migrations applied: ${applied.join(', ')}`);
+const stopCleanup = scheduleCleanup(pool);
 
 const sites = new SiteRepo(pool, fromB64url(cfg.ENCRYPTION_KEY));
 const clients = new PgClientsStore(pool, cfg.redirectAllowlist);
@@ -49,6 +51,7 @@ const server = app.listen(cfg.PORT, () => console.log(`crservers-connector liste
 
 for (const sig of ['SIGTERM', 'SIGINT'] as const) {
   process.on(sig, () => {
+    stopCleanup();
     server.close(() => void pool.end().then(() => process.exit(0)));
   });
 }

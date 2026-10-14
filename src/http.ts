@@ -13,6 +13,15 @@ import type { Pool } from 'pg';
 import { LOGO_SVG } from './ui/logo.js';
 import { LOGO_PATH, landingPage, pickLang } from './ui/page.js';
 
+/** 203.0.113.42 → 203.0.113.0, 2001:db8:abcd:12::1 → 2001:db8:abcd::. */
+export function anonymizeIp(ip: string | undefined): string {
+  if (!ip) return '';
+  const v4 = ip.replace(/^::ffff:/, '');
+  if (/^\d+\.\d+\.\d+\.\d+$/.test(v4)) return v4.replace(/\.\d+$/, '.0');
+  if (ip.includes(':')) return `${ip.split(':').slice(0, 3).join(':')}::`;
+  return '';
+}
+
 export const SCOPES_SUPPORTED = ['site', 'offline_access'];
 
 export interface AppDeps {
@@ -54,7 +63,8 @@ export function createApp(d: AppDeps): Express {
           s: res.statusCode,
           ms: Number((process.hrtime.bigint() - start) / 1_000_000n),
           ua: (req.get('user-agent') ?? '').slice(0, 80),
-          ip: req.ip,
+          // Anonymized (IPv4 /24, IPv6 /48): request logs hold no personal data (see "Data retention").
+          ip: anonymizeIp(req.ip),
         }),
       );
     });

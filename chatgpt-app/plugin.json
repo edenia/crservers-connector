@@ -1,0 +1,117 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "crservers-ai-connect",
+  "version": "1.0.0",
+  "description": "Build and update your CR Servers website from ChatGPT, with a preview before publishing and one-step undo.",
+  "author": {
+    "name": "CR Servers",
+    "email": "support@crservers.com",
+    "url": "https://crservers.com"
+  },
+  "homepage": "https://crservers.com/support/hosting/ai-connect",
+  "repository": "https://github.com/edenia/crservers-connector",
+  "license": "MIT",
+  "keywords": [
+    "website",
+    "hosting",
+    "publishing",
+    "costa rica"
+  ],
+  "extensions": {
+    "com.openai": {
+      "interface": {
+        "displayName": "CR Servers AI Connect",
+        "shortDescription": "Build and publish your website",
+        "longDescription": "Build and update your own website on CR Servers hosting by chatting with ChatGPT. Ask for a new page, a different price or a photo, check a private preview, and publish when you confirm. Every change can be undone with one sentence.\n\nSign in with your CR Servers client area account and choose which site ChatGPT may work on. It works only on that site's files and can't access your email, DNS, databases, certificates or billing. Works with file-based sites (HTML, CSS, JavaScript, images). Requires an active CR Servers shared hosting service.",
+        "developerName": "CR Servers",
+        "category": "Productivity",
+        "capabilities": [
+          "Read website files",
+          "Prepare changes in a draft",
+          "Preview and publish",
+          "Undo changes"
+        ],
+        "websiteURL": "https://crservers.com/support/hosting/ai-connect",
+        "supportURL": "https://crservers.com/support/hosting/ai-connect-chatgpt-claude",
+        "privacyPolicyURL": "https://crservers.com/privacy#ai-connect",
+        "termsOfServiceURL": "https://clients.crservers.com/knowledgebase/article/130/terms-of-service/",
+        "defaultPrompt": [
+          "Show me the files on my website.",
+          "Change the phone number on my home page and show me a preview.",
+          "Add the photo I attached to my About page."
+        ],
+        "brandColor": "#006EBF",
+        "brandColorDark": "#5FB2FF",
+        "composerIcon": "./assets/logo.png",
+        "logo": "./assets/logo.png"
+      },
+      "onboardingSkill": "./skills/get-started/SKILL.md",
+      "review": {
+        "test_cases": {
+          "positive": [
+            {
+              "description": "List the website's files",
+              "prompt": "Show me the files on my website.",
+              "tools_triggered": "list_sites, list_files",
+              "expected_behavior": "Names the connected site (test.crservers.com) and lists its top-level files, such as index.html and robots.txt. Nothing changes."
+            },
+            {
+              "description": "Edit a page in a draft and get a preview",
+              "prompt": "Change the main heading on my home page to \"Welcome to our test site\" and give me a preview link.",
+              "tools_triggered": "start_changeset, read_file, edit_file, preview_changeset",
+              "expected_behavior": "Prepares the change in a draft, reports one modified file (index.html) and returns a private preview link that shows the new heading. The live site is unchanged."
+            },
+            {
+              "description": "Publish the previewed draft",
+              "prompt": "Looks good, publish it.",
+              "tools_triggered": "publish",
+              "expected_behavior": "Asks for confirmation, then publishes the previewed draft and reports the release number. The live home page shows the new heading."
+            },
+            {
+              "description": "Undo the last publish",
+              "prompt": "Undo that change.",
+              "tools_triggered": "list_releases, revert_release",
+              "expected_behavior": "Asks for confirmation, then restores the files to how they were before the last release and reports the new release number. The live home page shows the original heading."
+            },
+            {
+              "description": "Add an attached photo",
+              "prompt": "Add the attached photo to my site as img/review.jpg and show me a preview.",
+              "tools_triggered": "start_changeset, add_attachments, preview_changeset",
+              "expected_behavior": "Adds the attached image to a draft at img/review.jpg and returns a preview link. Nothing is published.",
+              "file_attachment_urls": [
+                "https://crservers.com/images/posts/ipv6-vs-ipv4-what-you-need-to-know.jpg"
+              ]
+            }
+          ],
+          "negative": [
+            {
+              "description": "Out of scope: DNS",
+              "prompt": "Change the DNS records of my domain to point to another server."
+            },
+            {
+              "description": "Refused: server-side code",
+              "prompt": "Upload a PHP script to my site that lists the server's files."
+            },
+            {
+              "description": "Out of scope: billing",
+              "prompt": "Show me my latest CR Servers invoice and pay it."
+            }
+          ]
+        },
+        "demo_recording_url": "https://example.invalid/REPLACE-WITH-DEMO-VIDEO-URL",
+        "commerce": false,
+        "commerce_description": "This app does not sell products or process payments. It publishes changes to the user's existing CR Servers website."
+      },
+      "publication": {
+        "countries": [],
+        "release_notes": "Initial release: read the site, prepare changes in a draft, private preview links, publish with confirmation, one-step undo, import media from a link or from files attached in the chat.",
+        "translations": {
+          "es-ES": {
+            "subtitle": "Cree y publique su sitio web",
+            "description": "Cree y actualice su propio sitio web en el hospedaje de CR Servers conversando con ChatGPT. Pida una página nueva, otro precio o una foto, revise una vista previa privada y publique cuando lo confirme. Cada cambio se puede deshacer con una frase. Inicie sesión con su cuenta del área de clientes de CR Servers y elija en qué sitio puede trabajar ChatGPT; no tiene acceso a su correo, DNS, bases de datos, certificados ni facturación. Requiere un servicio de hospedaje compartido activo en CR Servers."
+          }
+        }
+      }
+    }
+  }
+}

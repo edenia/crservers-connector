@@ -557,7 +557,7 @@ describe('approval link', () => {
     const after = await call(c, 'publish', { changeset_id: id });
     expect(after.data).toMatchObject({ approved_in_browser: true, release: expect.any(Number) });
     const log = await call(c, 'get_activity_log', { limit: 3 });
-    expect(log.data.events[0]).toMatchObject({ action: 'publish', detail: { approved_in_browser: true } });
+    expect(log.data.events[0]).toMatchObject({ action: 'publish', approved_in_browser: true, files_changed: 1 });
     await c.close();
   });
 

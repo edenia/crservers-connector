@@ -33,6 +33,7 @@ jobs:
       INGRESS_HOST: ${{ vars.INGRESS_HOST }}
       CLIENT_AREA_URL: ${{ vars.CLIENT_AREA_URL }}
       EXTRA_REDIRECT_URIS: ${{ vars.EXTRA_REDIRECT_URIS }}
+      OPENAI_APPS_CHALLENGE: ${{ vars.OPENAI_APPS_CHALLENGE }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -98,7 +99,7 @@ jobs:
           set -euo pipefail
           test -n "$INGRESS_HOST" && test -n "$CLIENT_AREA_URL"
           mkdir -p build_k8s
-          for f in k8s/*.yml; do envsubst '${IMAGE} ${VERSION} ${INGRESS_HOST} ${CLIENT_AREA_URL} ${EXTRA_REDIRECT_URIS}' < "$f" > "build_k8s/$(basename "$f")"; done
+          for f in k8s/*.yml; do envsubst '${IMAGE} ${VERSION} ${INGRESS_HOST} ${CLIENT_AREA_URL} ${EXTRA_REDIRECT_URIS} ${OPENAI_APPS_CHALLENGE}' < "$f" > "build_k8s/$(basename "$f")"; done
           kubectl apply -n "$NAMESPACE" -f build_k8s/postgres.yml
           kubectl -n "$NAMESPACE" rollout status statefulset/connector-postgres --timeout=300s
           kubectl apply -n "$NAMESPACE" -f build_k8s/app.yml -f build_k8s/ingress.yml

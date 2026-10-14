@@ -20,6 +20,8 @@ export interface AppDeps {
   issuer: string;
   mcpUrl: string;
   mcp: McpDeps;
+  /** OpenAI apps directory domain verification token (empty = 404). */
+  openaiAppsChallenge?: string;
   preview: PreviewService;
   approvals: ApprovalService;
   /** Data for the client area's AI Connect page (signed with REQ_KEY). */
@@ -126,6 +128,12 @@ export function createApp(d: AppDeps): Express {
 
   app.get(LOGO_PATH, (_req, res) => {
     res.set('cache-control', 'public, max-age=86400').type('image/svg+xml').send(LOGO_SVG);
+  });
+
+  // ChatGPT directory domain verification: the exact token as plain text.
+  app.get('/.well-known/openai-apps-challenge', (_req, res) => {
+    if (!d.openaiAppsChallenge) return void res.status(404).end();
+    res.type('text/plain').send(d.openaiAppsChallenge);
   });
 
   app.get('/healthz', (_req, res) => {

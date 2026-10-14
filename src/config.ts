@@ -25,6 +25,8 @@ const schema = z.object({
   /** AES-256-GCM key for secrets at rest (site FTP passwords). */
   ENCRYPTION_KEY: b64urlKey,
   /** Extra exact redirect URIs, comma-separated (e.g. the one shown in OpenAI's dashboard, or MCP Inspector in dev). */
+  /** OpenAI apps directory domain verification token, served at /.well-known/openai-apps-challenge. */
+  OPENAI_APPS_CHALLENGE: z.string().trim().default(''),
   EXTRA_REDIRECT_URIS: z
     .string()
     .default('')

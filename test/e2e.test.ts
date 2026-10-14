@@ -90,7 +90,7 @@ beforeAll(async () => {
   const mcp = { core, sites, preview, approvals, audit, openFs: async () => siteFs, appName, fetchUrl };
   sitesRepo = sites;
   const clientApi = { pool, sites, audit, appName, reqKey, revokeGrant: (id: string) => provider.revokeGrant(id) };
-  server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals, clientApi, events: { pool, sites, reqKey } }));
+  server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals, clientApi, openaiAppsChallenge: 'test-challenge-token', events: { pool, sites, reqKey } }));
 });
 
 afterAll(async () => {
@@ -296,7 +296,7 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     const { tools } = await c.listTools();
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
     expect(Object.keys(byName).sort()).toEqual(
-      ['delete_files', 'discard_changeset', 'edit_file', 'import_from_url', 'get_activity_log', 'get_site_info', 'get_usage_limits', 'list_files', 'list_releases', 'list_sites', 'preview_changeset', 'publish', 'read_file', 'revert_release', 'start_changeset', 'write_files'].sort(),
+      ['add_attachments', 'delete_files', 'discard_changeset', 'edit_file', 'import_from_url', 'get_activity_log', 'get_site_info', 'get_usage_limits', 'list_files', 'list_releases', 'list_sites', 'preview_changeset', 'publish', 'read_file', 'revert_release', 'start_changeset', 'write_files'].sort(),
     );
     for (const t of tools) {
       expect(t.annotations, t.name).toMatchObject({ readOnlyHint: expect.any(Boolean), destructiveHint: expect.any(Boolean), openWorldHint: expect.any(Boolean) });
@@ -557,7 +557,7 @@ describe('approval link', () => {
     const after = await call(c, 'publish', { changeset_id: id });
     expect(after.data).toMatchObject({ approved_in_browser: true, release: expect.any(Number) });
     const log = await call(c, 'get_activity_log', { limit: 3 });
-    expect(log.data.events[0]).toMatchObject({ action: 'publish', detail: { approved_in_browser: true } });
+    expect(log.data.events[0]).toMatchObject({ action: 'publish', approved_in_browser: true, files_changed: 1 });
     await c.close();
   });
 
@@ -805,5 +805,52 @@ describe('client-area API for the AI Connect page', () => {
     expect(r.body.revoked).toBeGreaterThanOrEqual(2);
     expect((await siteInfo(a)).status).toBe(401);
     expect((await siteInfo(b)).status).toBe(401);
+  });
+});
+
+describe('ChatGPT directory readiness', () => {
+  it('add_attachments declares OpenAI file params with the exact schema the review scan expects', async () => {
+    const c = await mcpClient(await connect('publish'));
+    const { tools } = await c.listTools();
+    const t = tools.find((x) => x.name === 'add_attachments')!;
+    expect(t._meta).toMatchObject({ 'openai/fileParams': ['files'] });
+    const file = (t.inputSchema.properties as any).files.items;
+    expect(Object.keys(file.properties).sort()).toEqual(['download_url', 'file_id', 'file_name', 'mime_type']);
+    expect([...file.required].sort()).toEqual(['download_url', 'file_id']);
+    for (const x of tools) expect(x.annotations, x.name).toMatchObject({ readOnlyHint: expect.any(Boolean), destructiveHint: expect.any(Boolean), openWorldHint: expect.any(Boolean) });
+    await c.close();
+  });
+
+  it('adds attached photos to the draft; refuses a mismatch; requires one path per file', async () => {
+    const c = await mcpClient(await connect('publish'));
+    const { data: draft } = await call(c, 'start_changeset');
+    const photo = { download_url: 'https://files.oaiusercontent.example/foto.png', file_id: 'file_1', mime_type: 'image/png', file_name: 'IMG_0001.png' };
+    const ok = await call(c, 'add_attachments', { changeset_id: draft.changeset_id, files: [photo], paths: ['img/equipo.png'] });
+    expect(ok.isError).toBe(false);
+    expect(ok.data.added).toEqual([{ path: 'img/equipo.png', size: 11 }]);
+    const html = { download_url: 'https://files.oaiusercontent.example/page', file_id: 'file_2' };
+    const bad = await call(c, 'add_attachments', { changeset_id: draft.changeset_id, files: [html], paths: ['img/x.png'] });
+    expect(bad.isError).toBe(true);
+    const mismatch = await call(c, 'add_attachments', { changeset_id: draft.changeset_id, files: [photo, photo], paths: ['img/a.png'] });
+    expect(mismatch.isError).toBe(true);
+    await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
+    await c.close();
+  });
+
+  it('tool output carries no internal ids', async () => {
+    const c = await mcpClient(await connect('publish'));
+    expect((await call(c, 'list_sites')).data.sites[0]).toEqual({ domain: 'uat.example', permission: 'publish' });
+    const log = await call(c, 'get_activity_log', { limit: 50 });
+    const text = JSON.stringify(log.data);
+    expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/); // no UUIDs
+    expect(text).not.toContain('changeset_id');
+    await c.close();
+  });
+
+  it('serves the OpenAI domain verification token as plain text', async () => {
+    const res = await get('/.well-known/openai-apps-challenge');
+    expect(res.status).toBe(200);
+    expect(res.headers.get('content-type')).toContain('text/plain');
+    expect(await res.text()).toBe('test-challenge-token');
   });
 });

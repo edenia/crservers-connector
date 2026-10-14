@@ -900,3 +900,19 @@ describe('edit_file removals', () => {
     await c.close();
   });
 });
+
+describe('backup files in the web root', () => {
+  it('list_files flags backup-looking files with a suggestion', async () => {
+    siteFs.put('index.html.bak-20260723', 'old');
+    siteFs.put('index.html.orig', 'old');
+    const c = await mcpClient(await connect('publish'));
+    const r = await call(c, 'list_files', {});
+    expect(r.data.note).toContain('index.html.bak-20260723');
+    expect(r.data.note).toContain('index.html.orig');
+    expect(r.data.note).not.toContain('robots');
+    siteFs.files.delete('index.html.bak-20260723');
+    siteFs.files.delete('index.html.orig');
+    expect((await call(c, 'list_files', {})).data.note).toBeUndefined();
+    await c.close();
+  });
+});

@@ -197,7 +197,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     {
       title: 'Edit file in draft',
       description:
-        'Changes part of a text file by exact find-and-replace, without sending the whole file, and saves the result to the draft stored on CR Servers (kept until published or discarded, at most 24 hours). The live site doesn\'t change until publish. Each old_text must appear exactly once (add surrounding text to make it unique). Works on the draft version if the file was already changed in this draft, otherwise on the live version.',
+        'Saves an edited copy of a text file to the draft stored on CR Servers (kept until published or discarded, at most 24 hours), changing only the given passages so the whole file isn\'t resent. Reversible: it never overwrites or deletes files on the live site (only publish does), the draft can be dropped with discard_changeset, and every publish can be undone with revert_release. Each old_text must appear exactly once (add surrounding text to make it unique). Works on the draft version if the file was already changed in this draft, otherwise on the live version.',
       inputSchema: {
         changeset_id: z.string(),
         path: z.string(),
@@ -240,7 +240,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     'write_files',
     {
       title: 'Write files to draft',
-      description: `Adds or replaces files and saves them to the draft stored on CR Servers (kept until published or discarded, at most 24 hours). The live site doesn't change until publish. ≤${MAX_CALL_FILES} files and ≤${MAX_CALL_BYTES / MB} MB per call. Use encoding "base64" for binary files.`,
+      description: `Saves new or updated copies of files to the draft stored on CR Servers (kept until published or discarded, at most 24 hours). Reversible: it never overwrites or deletes files on the live site (only publish does), the draft can be dropped with discard_changeset, and every publish can be undone with revert_release. ≤${MAX_CALL_FILES} files and ≤${MAX_CALL_BYTES / MB} MB per call. Use encoding "base64" for binary files.`,
       inputSchema: {
         changeset_id: z.string(),
         files: z

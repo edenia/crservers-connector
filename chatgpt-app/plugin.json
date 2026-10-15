@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "crservers-ai-connect",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Publish changes to your CR Servers-hosted website from ChatGPT, with a private preview first and one-step undo.",
   "author": {
     "name": "CR Servers",
@@ -104,7 +104,7 @@
       },
       "publication": {
         "countries": [],
-        "release_notes": "Initial release: read the site, prepare changes in a draft, private preview links, publish with confirmation, one-step undo, import media from a link or from files attached in the chat.",
+        "release_notes": "Initial release: edit website files in a draft, private preview links, publish to the live website after confirmation, one-step undo, media from a link or attached in the chat.",
         "translations": {
           "es-ES": {
             "subtitle": "Publique cambios en su sitio",

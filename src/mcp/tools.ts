@@ -197,7 +197,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     {
       title: 'Edit file in draft',
       description:
-        'Changes part of a text file in the draft by exact find-and-replace, without sending the whole file. Each old_text must appear exactly once (add surrounding text to make it unique). Works on the draft version if the file was already changed in this draft, otherwise on the live version.',
+        'Changes part of a text file by exact find-and-replace, without sending the whole file, and saves the result to the draft stored on CR Servers (kept until published or discarded, at most 24 hours). The live site doesn\'t change until publish. Each old_text must appear exactly once (add surrounding text to make it unique). Works on the draft version if the file was already changed in this draft, otherwise on the live version.',
       inputSchema: {
         changeset_id: z.string(),
         path: z.string(),
@@ -227,7 +227,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
 
   server.registerTool(
     'start_changeset',
-    { title: 'Start draft', description: 'Opens a draft based on the live site (expires after 24 h). Nothing is live until publish.', inputSchema: { note: z.string().max(500).optional() }, annotations: DRAFT },
+    { title: 'Start draft', description: 'Creates a new draft on CR Servers, based on the live site, where changes are saved before publishing (kept up to 24 hours). The live site doesn\'t change until publish.', inputSchema: { note: z.string().max(500).optional() }, annotations: DRAFT },
     (a) =>
       run(async ({ site, clientId }, fs) => {
         const d = await deps.core.startDraft(site.id, await fs(), a.note);
@@ -240,7 +240,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     'write_files',
     {
       title: 'Write files to draft',
-      description: `Adds or replaces files in the draft (≤${MAX_CALL_FILES} files and ≤${MAX_CALL_BYTES / MB} MB per call). Use encoding "base64" for binary files.`,
+      description: `Adds or replaces files and saves them to the draft stored on CR Servers (kept until published or discarded, at most 24 hours). The live site doesn't change until publish. ≤${MAX_CALL_FILES} files and ≤${MAX_CALL_BYTES / MB} MB per call. Use encoding "base64" for binary files.`,
       inputSchema: {
         changeset_id: z.string(),
         files: z
@@ -266,7 +266,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     {
       title: 'Import file from a link',
       description:
-        'Downloads a media file (image, video, audio, font or PDF) from a public http(s) link into the draft at `path`. Use it for images you generated, stock photos, or Google Drive / Dropbox share links (made public). The file must really be of the type its path says.',
+        'Downloads a media file (image, video, audio, font or PDF) from a public http(s) link and saves it to the draft stored on CR Servers at `path` (the live site doesn\'t change until publish). Use it for images you generated, stock photos, or Google Drive / Dropbox share links (made public). The file must really be of the type its path says.',
       inputSchema: {
         changeset_id: z.string(),
         url: z.string().url().max(2000),
@@ -290,7 +290,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     {
       title: 'Add attached files to draft',
       description:
-        'Adds photos or other media files the user attached in the chat to the draft. Give one site path per file, in the same order (e.g. "img/team.jpg"). Media only (images, video, audio, fonts, PDF); each file must really be the type its path says.',
+        'Saves photos or other media files the user attached in the chat to the draft stored on CR Servers (the live site doesn\'t change until publish). Give one site path per file, in the same order (e.g. "img/team.jpg"). Media only (images, video, audio, fonts, PDF); each file must really be the type its path says.',
       inputSchema: {
         changeset_id: z.string(),
         files: z.array(z.object({ download_url: z.string(), file_id: z.string(), mime_type: z.string().optional(), file_name: z.string().optional() })).min(1).max(10),
@@ -321,7 +321,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
 
   server.registerTool(
     'delete_files',
-    { title: 'Delete files in draft', description: 'Marks files for deletion in the draft.', inputSchema: { changeset_id: z.string(), paths: z.array(z.string()).min(1).max(500) }, annotations: DRAFT },
+    { title: 'Delete files in draft', description: 'Marks files for deletion and saves that to the draft stored on CR Servers. The files are deleted from the live site only when the draft is published.', inputSchema: { changeset_id: z.string(), paths: z.array(z.string()).min(1).max(500) }, annotations: DRAFT },
     (a) =>
       run(async ({ site }, fs) => {
         const results = await deps.core.deleteFiles(a.changeset_id, site.id, await fs(), a.paths);

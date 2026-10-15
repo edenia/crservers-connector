@@ -57,7 +57,7 @@
             },
             {
               "description": "Edit a page in a draft and get a preview",
-              "prompt": "Change the main heading on my home page to \"Welcome to our test site\" and give me a preview link.",
+              "prompt": "Change the main heading on my home page to \"Hello from ChatGPT\" and give me a preview link.",
               "tools_triggered": "start_changeset, read_file, edit_file, preview_changeset",
               "expected_behavior": "Prepares the change in a draft, reports one modified file (index.html) and returns a private preview link that shows the new heading. The live site is unchanged."
             },

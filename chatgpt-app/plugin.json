@@ -2,7 +2,7 @@
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "crservers-ai-connect",
   "version": "1.0.0",
-  "description": "Build and update your CR Servers website from ChatGPT, with a preview before publishing and one-step undo.",
+  "description": "Publish changes to your CR Servers-hosted website from ChatGPT, with a private preview first and one-step undo.",
   "author": {
     "name": "CR Servers",
     "email": "support@crservers.com",
@@ -21,15 +21,15 @@
     "com.openai": {
       "interface": {
         "displayName": "CR Servers AI Connect",
-        "shortDescription": "Build and publish your website",
-        "longDescription": "Build and update your own website on CR Servers hosting by chatting with ChatGPT. Ask for a new page, a different price or a photo, check a private preview, and publish when you confirm. Every change can be undone with one sentence.\n\nSign in with your CR Servers client area account and choose which site ChatGPT may work on. It works only on that site's files and can't access your email, DNS, databases, certificates or billing. Works with file-based sites (HTML, CSS, JavaScript, images). Requires an active CR Servers shared hosting service.",
+        "shortDescription": "Publish website changes",
+        "longDescription": "Publish changes to your website hosted on CR Servers, straight from ChatGPT. Ask ChatGPT to edit a page, update a price or add a photo: it prepares the change in a draft, gives you a private preview link, and publishes it to your live site only after you confirm. Every published change can be undone with one sentence.\n\nYou sign in with your CR Servers client area account and choose which website ChatGPT may work on. It works only with that website's files (HTML, CSS, JavaScript, images) and can't access your email, DNS, databases, certificates or billing. Requires an active CR Servers shared hosting service.",
         "developerName": "CR Servers",
-        "category": "Productivity",
+        "category": "Developer Tools",
         "capabilities": [
-          "Read website files",
-          "Prepare changes in a draft",
-          "Preview and publish",
-          "Undo changes"
+          "Edit website files",
+          "Preview changes before publishing",
+          "Publish to the live website",
+          "Undo published changes"
         ],
         "websiteURL": "https://crservers.com/support/hosting/ai-connect",
         "supportURL": "https://crservers.com/support/hosting/ai-connect-chatgpt-claude",
@@ -107,8 +107,8 @@
         "release_notes": "Initial release: read the site, prepare changes in a draft, private preview links, publish with confirmation, one-step undo, import media from a link or from files attached in the chat.",
         "translations": {
           "es-ES": {
-            "subtitle": "Cree y publique su sitio web",
-            "description": "Cree y actualice su propio sitio web en el hospedaje de CR Servers conversando con ChatGPT. Pida una página nueva, otro precio o una foto, revise una vista previa privada y publique cuando lo confirme. Cada cambio se puede deshacer con una frase. Inicie sesión con su cuenta del área de clientes de CR Servers y elija en qué sitio puede trabajar ChatGPT; no tiene acceso a su correo, DNS, bases de datos, certificados ni facturación. Requiere un servicio de hospedaje compartido activo en CR Servers."
+            "subtitle": "Publique cambios en su sitio",
+            "description": "Publique cambios en su sitio web hospedado en CR Servers directamente desde ChatGPT. Pídale a ChatGPT que edite una página, actualice un precio o agregue una foto: prepara el cambio en un borrador, le da un enlace privado de vista previa y lo publica en su sitio solo cuando usted lo confirma. Cada cambio publicado se puede deshacer con una frase. Inicie sesión con su cuenta del área de clientes de CR Servers y elija en qué sitio puede trabajar ChatGPT; solo trabaja con los archivos de ese sitio y no tiene acceso a su correo, DNS, bases de datos, certificados ni facturación. Requiere un servicio de hospedaje compartido activo en CR Servers."
           }
         }
       }

@@ -39,8 +39,8 @@ The MCP origin `https://connect.crservers.com` can't change after submission.
 | Field | Value |
 |---|---|
 | Name | CR Servers AI Connect |
-| Short description | Build and publish your website |
-| Category | Productivity |
+| Short description | Publish website changes |
+| Category | Developer Tools |
 | Countries | All (`[]`) |
 | Website / support | KB overview / connecting guide on crservers.com |
 | Privacy / terms | `crservers.com/privacy#ai-connect` / client-area terms of service (names Sistemas Edenia Internacional S.A.) |

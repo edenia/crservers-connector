@@ -26,7 +26,7 @@ export class PgClientsStore implements OAuthRegisteredClientsStore {
   private assertRedirects(uris: unknown): asserts uris is string[] {
     if (!Array.isArray(uris) || uris.length === 0) throw new InvalidClientMetadataError('redirect_uris is required');
     for (const u of uris) {
-      if (typeof u !== 'string' || !this.redirectAllowlist.includes(u)) {
+      if (typeof u !== 'string' || !(this.redirectAllowlist.includes(u) || isLoopbackRedirect(u))) {
         // Logged so a new AI host callback can be added to EXTRA_REDIRECT_URIS (a URL, not a secret).
         console.warn(JSON.stringify({ t: new Date().toISOString(), event: 'redirect_uri_refused', redirect_uri: String(u).slice(0, 300) }));
         throw new InvalidClientMetadataError(`redirect_uri not allowed: ${String(u)}`);
@@ -101,5 +101,19 @@ export class PgClientsStore implements OAuthRegisteredClientsStore {
       [clientId, info],
     );
     return info;
+  }
+}
+
+/**
+ * Native apps on the user's own computer (Claude Code) get their callback on a loopback address with
+ * a port that changes every time (RFC 8252 §7.3; the SDK matches it on any port). A code sent there
+ * only reaches that computer, and the sign-in is still bound to the browser that started it.
+ */
+export function isLoopbackRedirect(uri: string): boolean {
+  try {
+    const u = new URL(uri);
+    return u.protocol === 'http:' && ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname) && !u.username && !u.password && !u.hash;
+  } catch {
+    return false;
   }
 }

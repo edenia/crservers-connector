@@ -164,6 +164,30 @@ describe('registration', () => {
     const res = await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['https://evil.example/cb'] }) });
     expect(res.status).toBe(400);
   });
+
+  it('accepts loopback callbacks on any port for apps on the user\'s computer (Claude Code)', async () => {
+    const reg = await fetch(`${base}/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ redirect_uris: ['http://localhost/callback', 'http://127.0.0.1/callback'], client_name: 'Claude Code', token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'] }),
+    });
+    expect(reg.status).toBe(201);
+    const { client_id } = (await reg.json()) as { client_id: string };
+    const { challenge } = pkce();
+    const q = new URLSearchParams({
+      response_type: 'code', client_id, redirect_uri: 'http://localhost:51873/callback', code_challenge: challenge,
+      code_challenge_method: 'S256', state: 's', scope: 'site', resource: `${base}/mcp`,
+    });
+    const res = await get(`/authorize?${q}`);
+    expect(res.status).toBe(302);
+    const req = verifyReq(reqKey, new URL(res.headers.get('location')!).searchParams.get('req')!)!;
+    expect(req).toMatchObject({ app_name: 'Claude Code', app_host: 'localhost' });
+
+    for (const bad of ['https://localhost/callback', 'http://localhost.evil.example/callback', 'http://user@localhost/callback']) {
+      const r = await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: [bad] }) });
+      expect(r.status, bad).toBe(400);
+    }
+  });
 });
 
 describe('authorization code flow', () => {

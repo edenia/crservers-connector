@@ -8,7 +8,7 @@ import { InvalidGrantError, InvalidTargetError, InvalidTokenError } from '@model
 import { hashToken, randomToken, safeEqual } from '../crypto.js';
 import type { SiteRepo } from '../sites.js';
 import type { ClientAreaApi, ClientAreaSite } from './clientarea.js';
-import type { PgClientsStore } from './clients.js';
+import { isLoopbackRedirect, type PgClientsStore } from './clients.js';
 import { signReq } from './req.js';
 import { openSiteSetup } from './sitesetup.js';
 import { pickLang, signInErrorPage } from '../ui/page.js';
@@ -59,7 +59,8 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(secs => $9))`,
       [rid, client.client_id, params.redirectUri, params.codeChallenge, params.state ?? null, params.scopes ?? [], this.d.mcpUrl, hashToken(binding), REQUEST_TTL_S],
     );
-    const appHost = new URL(params.redirectUri).host;
+    // The consent screen names where the code goes; for a loopback callback that's the user's own computer.
+    const appHost = isLoopbackRedirect(params.redirectUri) ? 'localhost' : new URL(params.redirectUri).host;
     const req = signReq(this.d.reqKey, {
       rid,
       app_name: client.client_name?.slice(0, 60) || appHost,

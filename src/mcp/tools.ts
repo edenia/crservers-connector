@@ -34,7 +34,7 @@ export interface McpDeps {
 }
 
 export const INSTRUCTIONS = `CR Servers: publish and maintain websites on CR Servers hosting.
-A connection covers one or more sites (domains). Call list_sites first. When there are several, pass site (the domain) to the tools that take it, and ask the user which site they mean if it isn't clear. Tools that take changeset_id work on that draft's site.
+A connection covers one or more sites (domains). Call list_sites first. When there are several, pass site (the domain) to the tools that take it. Never guess the site: if the user hasn't named it in this conversation ("my site", "the home page"), ask which one first, and keep using it until they name another. Tools that take changeset_id work on that draft's site.
 How to work:
 1. start_changeset, then read_file / edit_file / write_files / delete_files. Nothing is live until publish. For small changes to big files, use edit_file.
 2. preview_changeset, show the user the summary and give them the preview_url (a private link that shows the draft as the site would look), and ask for explicit confirmation.
@@ -56,7 +56,7 @@ type Ctx = { site: Site; permission: 'preview' | 'publish'; clientId: string };
 /** Which site a tool call works on: a draft's, or a domain the AI named. */
 type SitePick = { changesetId?: string; site?: string };
 
-const SITE = z.string().max(253).optional().describe('Domain of the site to work on, e.g. "example.com". Needed only when the connection covers several sites (see list_sites).');
+const SITE = z.string().max(253).optional().describe('Domain of the site to work on, e.g. "example.com". Needed only when the connection covers several sites (see list_sites); then use the site the user named, and ask them if they have not named one.');
 
 /** "https://www.Example.com/x" → "www.example.com". */
 function normalizeDomain(raw: string): string {

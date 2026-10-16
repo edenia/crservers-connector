@@ -10,6 +10,7 @@ import { clientAreaEvents } from './auth/events.js';
 import { clientAreaApi, type ClientApiDeps } from './auth/clientapi.js';
 import type { SiteRepo } from './sites.js';
 import type { Pool } from 'pg';
+import { ICON_PNG } from './ui/icon.js';
 import { LOGO_SVG } from './ui/logo.js';
 import { LOGO_PATH, landingPage, pickLang } from './ui/page.js';
 
@@ -136,6 +137,10 @@ export function createApp(d: AppDeps): Express {
     d.preview.handle(req, res).catch(next);
   });
 
+  // The directories (Claude, ChatGPT) load these from other origins, so allow cross-origin use.
+  app.get(['/icon.png', '/favicon.ico'], (_req, res) => {
+    res.set({ 'cache-control': 'public, max-age=86400', 'cross-origin-resource-policy': 'cross-origin' }).type('image/png').send(ICON_PNG);
+  });
   app.get(LOGO_PATH, (_req, res) => {
     res.set('cache-control', 'public, max-age=86400').type('image/svg+xml').send(LOGO_SVG);
   });

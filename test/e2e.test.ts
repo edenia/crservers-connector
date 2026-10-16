@@ -665,6 +665,16 @@ describe('without the opt-in', () => {
     await c.close();
   });
 
+  it('serves an app icon any site can load (directory listings)', async () => {
+    for (const path of ['/icon.png', '/favicon.ico']) {
+      const res = await get(path);
+      expect(res.status, path).toBe(200);
+      expect(res.headers.get('content-type')).toBe('image/png');
+      expect(res.headers.get('cross-origin-resource-policy')).toBe('cross-origin');
+      expect(Buffer.from(await res.arrayBuffer()).subarray(1, 4).toString()).toBe('PNG');
+    }
+  });
+
   it('serves its own logo', async () => {
     const res = await get('/assets/crservers-logo.svg');
     expect(res.headers.get('content-type')).toContain('image/svg+xml');

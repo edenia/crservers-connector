@@ -1,5 +1,6 @@
 import type { Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
+import { SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/sdk/types.js';
 import { buildMcpServer, type McpDeps } from './tools.js';
 
 /**
@@ -14,6 +15,7 @@ export function mcpHandler(deps: McpDeps) {
     }
     const server = buildMcpServer(deps, req.auth);
     logToolCalls(req, res);
+    logUnsupportedProtocol(req);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
       void transport.close();
@@ -73,6 +75,26 @@ function logToolCalls(req: Request, res: Response): void {
     }
     return end(chunk, ...rest);
   }) as typeof res.end;
+}
+
+/**
+ * A client asking for an MCP protocol version this SDK doesn't support gets a 400. Logs the version,
+ * the JSON-RPC methods and the client (never message content), to see which clients need an SDK update.
+ */
+function logUnsupportedProtocol(req: Request): void {
+  const version = req.get('mcp-protocol-version');
+  const msgs = (Array.isArray(req.body) ? req.body : [req.body]) as { method?: string; params?: { protocolVersion?: unknown } }[];
+  const requested = msgs.map((m) => m?.params?.protocolVersion).find((v) => typeof v === 'string') as string | undefined;
+  const unsupported = [version, requested].filter((v): v is string => !!v && !SUPPORTED_PROTOCOL_VERSIONS.includes(v));
+  if (!unsupported.length) return;
+  console.warn(JSON.stringify({
+    t: new Date().toISOString(),
+    event: 'mcp_protocol_version_unsupported',
+    header: version ?? null,
+    initialize_requested: requested ?? null,
+    methods: msgs.map((m) => String(m?.method ?? '')).slice(0, 5),
+    ua: (req.get('user-agent') ?? '').slice(0, 60),
+  }));
 }
 
 type Reply = { id?: unknown; result?: { isError?: boolean; content?: { text?: string }[] }; error?: { message?: string } };

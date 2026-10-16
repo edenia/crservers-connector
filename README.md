@@ -65,7 +65,7 @@ AI assistant ──MCP──▶ connector ──FTPS──▶ the client's web r
      └── OAuth 2.1 ─────┴──▶ CR Servers client area (sign-in, consent, site picker)
 ```
 
-- **One site per connection.** The token is bound to the site the client picked, and to this server's MCP URL.
+- **Only the sites the client picked.** The token is bound to the sites (domains) the client ticked when connecting, and to this server's MCP URL. A subdomain's folder can't be changed through its parent site.
 - **Drafts first.** Changes are staged; nothing is live until `publish`.
 - **Preview gate.** `publish` only accepts a draft that was previewed in its current form, even if the AI host is set to "always allow".
 - **Conflict check.** Publishing is refused if the live file changed since the draft was based on it.

@@ -47,6 +47,8 @@ export interface Release {
 
 export interface DraftStore {
   get(id: string): Promise<Draft | undefined>;
+  /** The draft's site, without loading its files. */
+  siteOf(id: string): Promise<string | undefined>;
   put(draft: Draft): Promise<void>;
   delete(id: string): Promise<void>;
 }
@@ -69,6 +71,9 @@ export class MemoryDraftStore implements DraftStore {
   private readonly drafts = new Map<string, Draft>();
   async get(id: string) {
     return this.drafts.get(id);
+  }
+  async siteOf(id: string) {
+    return this.drafts.get(id)?.siteId;
   }
   async put(draft: Draft) {
     this.drafts.set(draft.id, draft);

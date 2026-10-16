@@ -89,7 +89,7 @@ beforeAll(async () => {
   };
   const mcp = { core, sites, preview, approvals, audit, openFs: async () => siteFs, appName, fetchUrl };
   sitesRepo = sites;
-  const clientApi = { pool, sites, audit, appName, reqKey, revokeGrant: (id: string) => provider.revokeGrant(id) };
+  const clientApi = { pool, sites, audit, appName, reqKey, removeSite: (grantId: string, siteId: string) => provider.removeSite(grantId, siteId) };
   server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals, clientApi, openaiAppsChallenge: 'test-challenge-token', events: { pool, sites, reqKey } }));
 });
 
@@ -822,6 +822,122 @@ describe('client-area API for the AI Connect page', () => {
   });
 });
 
+describe('several sites per hosting service and per connection', () => {
+  // A hosting service (88) with its main domain, a secondary domain and a subdomain (inside the main site's folder).
+  const setup = (user: string) => sealSetup({ ftp_host: 'iwx41.crservers.com', ftp_user: user, ftp_password: randomBytes(24).toString('base64url') });
+  const multi = (sites: NonNullable<ClientAreaGrant['sites']>, scope: 'publish' | 'preview' = 'publish'): ClientAreaGrant => ({
+    client_id: 40, account_id: sites[0]!.account_id, domain: sites[0]!.domain, server_id: '6', scope, sites,
+  });
+  const MAIN = { account_id: 88, domain: 'selva.example', kind: 'main' as const, protected_dirs: ['dev'] };
+  const SECOND = { account_id: 88, domain: 'carrot.example', kind: 'secondary' as const, protected_dirs: [] };
+  const SUB = { account_id: 88, domain: 'dev.selva.example', kind: 'subdomain' as const, protected_dirs: [] };
+  async function api(path: string, payload: Record<string, unknown>) {
+    const body = JSON.stringify({ ...payload, at: Math.floor(Date.now() / 1000), nonce: randomBytes(12).toString('base64url') });
+    const sig = createHmac('sha256', reqKey).update(body).digest('base64url');
+    const res = await fetch(`${base}/client-area/api/${path}`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-crs-signature': sig }, body });
+    return { status: res.status, body: (await res.json()) as Record<string, any> };
+  }
+  let token: string;
+
+  it('one connection covers every chosen site; each gets its own deploy user on first use', async () => {
+    const r = await connectWith(multi([
+      { ...MAIN, site_setup: setup('crsconnect@selva.example') },
+      { ...SECOND, site_setup: setup('crsconnect1a2b3c4d@selva.example') },
+      { ...SUB, site_setup: setup('crsconnect9f8e7d6c@selva.example') },
+    ]));
+    expect(r.error).toBeNull();
+    token = r.token!;
+    expect((await sitesRepo.byService(88)).map((x) => [x.domain, x.kind])).toEqual([
+      ['selva.example', 'main'], ['carrot.example', 'secondary'], ['dev.selva.example', 'subdomain'],
+    ]);
+    expect((await sitesRepo.ftpConfig((await sitesRepo.byAccount(88, 'carrot.example'))!.id)).user).toBe('crsconnect1a2b3c4d@selva.example');
+    expect((await sitesRepo.byAccount(88))!.domain).toBe('selva.example'); // no domain: the main one
+
+    const c = await mcpClient(token);
+    expect((await call(c, 'list_sites')).data.sites.map((x: Structured) => x.domain)).toEqual(['carrot.example', 'dev.selva.example', 'selva.example']);
+    await c.close();
+  });
+
+  it('tools ask which site when there are several; drafts carry their site', async () => {
+    const c = await mcpClient(token);
+    const ambiguous = await call(c, 'get_site_info');
+    expect(ambiguous.isError).toBe(true);
+    expect(ambiguous.data.sites).toEqual(['carrot.example', 'dev.selva.example', 'selva.example']);
+    expect((await call(c, 'get_site_info', { site: 'https://www.carrot.example/' })).data).toMatchObject({ domain: 'carrot.example', type: 'secondary' });
+    expect((await call(c, 'get_site_info', { site: 'nope.example' })).isError).toBe(true);
+
+    const { data: d } = await call(c, 'start_changeset', { site: 'dev.selva.example' });
+    expect(d.site).toBe('dev.selva.example');
+    expect((await call(c, 'write_files', { changeset_id: d.changeset_id, files: [{ path: 'index.html', content: '<h1>dev</h1>' }] })).isError).toBe(false);
+    expect((await call(c, 'preview_changeset', { changeset_id: d.changeset_id })).isError).toBe(false);
+    expect((await call(c, 'list_releases', { site: 'dev.selva.example' })).data.releases).toEqual([]);
+    await c.close();
+  });
+
+  it('the parent site can read a subdomain folder but not change it', async () => {
+    const c = await mcpClient(token);
+    expect((await call(c, 'get_site_info', { site: 'selva.example' })).data.other_site_folders).toEqual(['dev']);
+    const { data: d } = await call(c, 'start_changeset', { site: 'selva.example' });
+    for (const [tool, args] of [
+      ['write_files', { files: [{ path: 'dev/index.html', content: 'x' }] }],
+      ['edit_file', { path: 'dev/index.html', edits: [{ old_text: 'a', new_text: 'b' }] }],
+      ['delete_files', { paths: ['./dev/old.html'] }],
+      ['import_from_url', { url: 'https://img.example/foto.png', path: 'dev/foto.png' }],
+    ] as const) {
+      const r = await call(c, tool, { changeset_id: d.changeset_id, ...args });
+      expect(r.isError, tool).toBe(true);
+      expect(r.text, tool).toContain('dev/');
+    }
+    expect((await call(c, 'write_files', { changeset_id: d.changeset_id, files: [{ path: 'developers.html', content: 'ok' }] })).isError).toBe(false);
+    await c.close();
+  });
+
+  it('removing access for one site keeps the connection for the others', async () => {
+    const page = await api('site', { service_id: 88, domain: 'carrot.example' });
+    expect(page.body.site).toMatchObject({ domain: 'carrot.example', kind: 'secondary' });
+    const conn = page.body.connections[0];
+    expect(conn.other_sites).toEqual(['dev.selva.example', 'selva.example']);
+
+    expect((await api('revoke', { service_id: 88, domain: 'carrot.example', grant_id: conn.id })).body.revoked).toBe(1);
+    const c = await mcpClient(token);
+    expect((await call(c, 'list_sites')).data.sites.map((x: Structured) => x.domain)).toEqual(['dev.selva.example', 'selva.example']);
+    expect((await call(c, 'get_site_info', { site: 'carrot.example' })).isError).toBe(true);
+    await c.close();
+
+    expect((await api('settings', { service_id: 88, domain: 'dev.selva.example', approve_every_publish: true })).body.approve_every_publish).toBe(true);
+    expect((await sitesRepo.byAccount(88, 'dev.selva.example'))!.approveEveryPublish).toBe(true);
+    expect((await sitesRepo.byAccount(88))!.approveEveryPublish).toBe(false);
+  });
+
+  it('lifecycle events apply to every site of the service; ownership change ends the connection', async () => {
+    await sendEvent(88, 'suspend');
+    expect((await sitesRepo.byService(88)).every((x) => x.status === 'frozen')).toBe(true);
+    const c = await mcpClient(token);
+    expect((await call(c, 'list_sites')).data.sites.every((x: Structured) => x.status === 'paused')).toBe(true);
+    expect((await call(c, 'get_site_info', { site: 'selva.example' })).text).toContain('pausada');
+    await c.close();
+    await sendEvent(88, 'unsuspend');
+    expect((await sitesRepo.byService(88)).every((x) => x.status === 'active')).toBe(true);
+
+    await sendEvent(88, 'revoke');
+    expect((await siteInfo(token)).status).toBe(401);
+  });
+
+  it('a connection mixing two hosting services loses only the transferred one', async () => {
+    const r = await connectWith(multi([{ ...MAIN }, { account_id: 15, domain: 'uat.example', kind: 'main', protected_dirs: [] }]));
+    expect(r.error).toBeNull();
+    await sendEvent(88, 'revoke');
+    const c = await mcpClient(r.token!);
+    expect((await call(c, 'list_sites')).data.sites.map((x: Structured) => x.domain)).toEqual(['uat.example']);
+    await c.close();
+  });
+
+  it('refuses the whole connection when a chosen site is not set up', async () => {
+    const r = await connectWith(multi([{ ...MAIN }, { account_id: 88, domain: 'nuevo2.example', kind: 'secondary', protected_dirs: [] }]));
+    expect(r.error).toBe('site not enabled for AI publishing yet');
+  });
+});
+
 describe('ChatGPT directory readiness', () => {
   it('add_attachments declares OpenAI file params with the exact schema the review scan expects', async () => {
     const c = await mcpClient(await connect('publish'));
@@ -853,7 +969,7 @@ describe('ChatGPT directory readiness', () => {
 
   it('tool output carries no internal ids', async () => {
     const c = await mcpClient(await connect('publish'));
-    expect((await call(c, 'list_sites')).data.sites[0]).toEqual({ domain: 'uat.example', permission: 'publish' });
+    expect((await call(c, 'list_sites')).data.sites[0]).toEqual({ domain: 'uat.example', type: 'main', permission: 'publish', status: 'active' });
     const log = await call(c, 'get_activity_log', { limit: 50 });
     const text = JSON.stringify(log.data);
     expect(text).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/); // no UUIDs

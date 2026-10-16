@@ -7,7 +7,7 @@ import type { OAuthClientInformationFull, OAuthTokenRevocationRequest, OAuthToke
 import { InvalidGrantError, InvalidTargetError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
 import { hashToken, randomToken, safeEqual } from '../crypto.js';
 import type { SiteRepo } from '../sites.js';
-import type { ClientAreaApi } from './clientarea.js';
+import type { ClientAreaApi, ClientAreaSite } from './clientarea.js';
 import type { PgClientsStore } from './clients.js';
 import { signReq } from './req.js';
 import { openSiteSetup } from './sitesetup.js';
@@ -101,22 +101,35 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       console.error(JSON.stringify({ t: new Date().toISOString(), event: 'client_area_exchange_failed', error: e.message.slice(0, 300) }));
       return null;
     });
-    if (ca?.site_setup && ca.scope !== 'approve') {
-      // First connection of this site: the client area just created its jailed deploy user.
-      try {
-        const s = openSiteSetup(this.d.reqKey, ca.site_setup);
-        await this.d.sites.upsertSetup({ serviceId: ca.account_id, domain: ca.domain, ftpHost: s.ftpHost, ftpUser: s.ftpUser, ftpPassword: s.ftpPassword });
-        console.log(JSON.stringify({ t: new Date().toISOString(), event: 'site_setup', service_id: ca.account_id, domain: ca.domain }));
-      } catch (e) {
-        console.error(JSON.stringify({ t: new Date().toISOString(), event: 'site_setup_failed', service_id: ca.account_id, error: (e as Error).message }));
-      }
-    }
-    const site = ca && (await this.d.sites.byAccount(ca.account_id));
     // Codes issued for approving a publish never become connections.
-    if (!ca || ca.scope === 'approve' || !site || site.status !== 'active') {
+    if (!ca || ca.scope === 'approve') {
       back.searchParams.set('error', 'access_denied');
       back.searchParams.set('error_description', !ca ? 'sign-in could not be verified' : 'site not enabled for AI publishing yet');
       return void res.redirect(302, back.href);
+    }
+
+    // Older client areas send one site at the top level.
+    const chosen: ClientAreaSite[] = ca.sites ?? [{ account_id: ca.account_id, domain: ca.domain, ...(ca.site_setup ? { site_setup: ca.site_setup } : {}) }];
+    const siteIds: string[] = [];
+    for (const c of chosen) {
+      if (c.site_setup) {
+        // First connection of this site: the client area just created its jailed deploy user.
+        try {
+          const s = openSiteSetup(this.d.reqKey, c.site_setup);
+          await this.d.sites.upsertSetup({ serviceId: c.account_id, domain: c.domain, kind: c.kind, ftpHost: s.ftpHost, ftpUser: s.ftpUser, ftpPassword: s.ftpPassword });
+          console.log(JSON.stringify({ t: new Date().toISOString(), event: 'site_setup', service_id: c.account_id, domain: c.domain }));
+        } catch (e) {
+          console.error(JSON.stringify({ t: new Date().toISOString(), event: 'site_setup_failed', service_id: c.account_id, domain: c.domain, error: (e as Error).message }));
+        }
+      }
+      const site = await this.d.sites.byAccount(c.account_id, c.domain);
+      if (!site || site.status !== 'active') {
+        back.searchParams.set('error', 'access_denied');
+        back.searchParams.set('error_description', 'site not enabled for AI publishing yet');
+        return void res.redirect(302, back.href);
+      }
+      if (c.kind) await this.d.sites.setLayout(site.id, c.kind, c.protected_dirs ?? []);
+      if (!siteIds.includes(site.id)) siteIds.push(site.id);
     }
 
     const grantId = randomUUID();
@@ -126,8 +139,9 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     const scopes = ['site', 'offline_access'];
     await this.d.pool.query(
       `INSERT INTO grants (id, client_id, account_holder_id, site_id, permission, scopes, resource) VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-      [grantId, ar.client_id, ca.client_id, site.id, ca.scope as 'preview' | 'publish', scopes, this.d.mcpUrl],
+      [grantId, ar.client_id, ca.client_id, siteIds[0], ca.scope as 'preview' | 'publish', scopes, this.d.mcpUrl],
     );
+    await this.d.pool.query('INSERT INTO grant_sites (grant_id, site_id) SELECT $1, unnest($2::uuid[])', [grantId, siteIds]);
     const code = randomToken(32);
     await this.d.pool.query(
       `INSERT INTO auth_codes (code_hash, grant_id, client_id, redirect_uri, code_challenge, expires_at)
@@ -177,7 +191,8 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
 
   async verifyAccessToken(token: string): Promise<AuthInfo> {
     const r = (await this.d.pool.query(
-      `SELECT t.client_id, t.expires_at, g.id AS grant_id, g.site_id, g.permission, g.scopes, g.resource, g.account_holder_id
+      `SELECT t.client_id, t.expires_at, g.id AS grant_id, g.permission, g.scopes, g.resource, g.account_holder_id,
+              ARRAY(SELECT s.site_id::text FROM grant_sites s WHERE s.grant_id = g.id) AS site_ids
        FROM tokens t JOIN grants g ON g.id = t.grant_id
        WHERE t.token_hash = $1 AND t.kind = 'access' AND t.revoked_at IS NULL AND g.revoked_at IS NULL AND t.expires_at > now()`,
       [hashToken(token)],
@@ -189,7 +204,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       scopes: r.scopes,
       expiresAt: Math.floor(new Date(r.expires_at).getTime() / 1000),
       resource: new URL(r.resource),
-      extra: { grantId: r.grant_id, siteId: r.site_id, permission: r.permission, accountHolderId: r.account_holder_id },
+      extra: { grantId: r.grant_id, siteIds: r.site_ids as string[], permission: r.permission, accountHolderId: r.account_holder_id },
     };
   }
 
@@ -197,11 +212,21 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     await this.d.pool.query('UPDATE tokens SET revoked_at = now() WHERE token_hash = $1 AND client_id = $2 AND revoked_at IS NULL', [hashToken(request.token), client.client_id]);
   }
 
-  /** Every connection to a site (service terminated or transferred to another client). */
+  /**
+   * Takes a site out of every connection (service terminated or transferred, or "remove access" for
+   * all apps). Connections left without sites are revoked. Returns how many connections it touched.
+   */
   async revokeSite(siteId: string): Promise<number> {
-    const r = await this.d.pool.query('UPDATE grants SET revoked_at = now() WHERE site_id = $1 AND revoked_at IS NULL RETURNING id', [siteId]);
-    for (const g of r.rows) await this.d.pool.query('UPDATE tokens SET revoked_at = now() WHERE grant_id = $1 AND revoked_at IS NULL', [g.id]);
+    const r = await this.d.pool.query('SELECT gs.grant_id FROM grant_sites gs JOIN grants g ON g.id = gs.grant_id WHERE gs.site_id = $1 AND g.revoked_at IS NULL', [siteId]);
+    for (const g of r.rows) await this.removeSite(g.grant_id, siteId);
     return r.rowCount ?? 0;
+  }
+
+  /** Takes one site out of one connection; revokes the connection when it has no sites left. */
+  async removeSite(grantId: string, siteId: string): Promise<void> {
+    await this.d.pool.query('DELETE FROM grant_sites WHERE grant_id = $1 AND site_id = $2', [grantId, siteId]);
+    const left = (await this.d.pool.query('SELECT count(*)::int AS n FROM grant_sites WHERE grant_id = $1', [grantId])).rows[0].n as number;
+    if (left === 0) await this.revokeGrant(grantId);
   }
 
   async revokeGrant(grantId: string): Promise<void> {

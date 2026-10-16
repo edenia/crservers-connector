@@ -6,8 +6,15 @@ import type { BlobStore, Draft, DraftStore, Release, ReleaseStore } from './stor
 
 const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 export class PgDraftStore implements DraftStore {
   constructor(private readonly pool: Pool) {}
+
+  async siteOf(id: string): Promise<string | undefined> {
+    if (!UUID_RE.test(id)) return undefined;
+    return (await this.pool.query('SELECT site_id FROM drafts WHERE id = $1', [id])).rows[0]?.site_id;
+  }
 
   async get(id: string): Promise<Draft | undefined> {
     const d = (await this.pool.query('SELECT * FROM drafts WHERE id = $1', [id])).rows[0];

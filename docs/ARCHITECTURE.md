@@ -1,6 +1,6 @@
 # Architecture
 
-The connector lets a CR Servers hosting client's own AI assistant work on **one** of their websites: read it, stage changes, preview, publish and undo. It's one small service with three parts: an OAuth 2.1 authorization server, an MCP endpoint, and a publishing core that writes to the site over FTPS.
+The connector lets a CR Servers hosting client's own AI assistant work on the websites they choose: read them, stage changes, preview, publish and undo. It's one small service with three parts: an OAuth 2.1 authorization server, an MCP endpoint, and a publishing core that writes to the site over FTPS.
 
 ```
  Claude / ChatGPT ──MCP (Streamable HTTP, Bearer)──▶ ┌───────────────────────────────┐
@@ -20,13 +20,28 @@ The connector never sees the client's password.
 
 1. The AI host starts a standard OAuth authorization request (PKCE S256, `resource` = this server's MCP URL).
 2. The connector records the request and sets a short-lived cookie that ties the flow to this browser. It then sends the browser to the CR Servers client area with a signed request (HMAC) that names the asking app.
-3. The client signs in there (with 2FA if enabled), sees which app is asking and what it can't do, picks a site and a permission (*edit and publish* or *preview only*), and confirms.
-4. The client area redirects back with a one-time code. The connector redeems it server-to-server. The client area enforces single use and a 60-second expiry, and re-checks that the client owns the site and that the service is active.
+3. The client signs in there (with 2FA if enabled), sees which app is asking and what it can't do, ticks one or more sites and picks a permission (*edit and publish* or *preview only*), and confirms.
+4. The client area redirects back with a one-time code. The connector redeems it server-to-server and gets the chosen sites. The client area enforces single use and a 60-second expiry, and re-checks that the client owns each site's hosting service and that it is active.
 5. The connector issues its own authorization code back to the AI host, with `iss` (RFC 9207). The binding cookie must match, so nobody can trick a client into linking their site to someone else's AI app.
+
+## Sites and connections
+
+A **site** is one domain of a hosting service:
+- **Main domain:** the service's own domain.
+- **Secondary domain:** another domain in the same hosting account, with its own folder.
+- **Subdomain:** for example `dev.example.com`. On our hosting, a subdomain's folder sits inside its parent domain's folder (`example.com/dev`).
+
+Pointer (alias) domains aren't sites: they show the main domain's files.
+
+A **connection** is one AI app authorized by one client for one or more sites, with one permission. Sites can come from different hosting services of the same client.
+- Tools that work on a draft use that draft's site.
+- The other tools take an optional `site` (the domain). When a connection has several sites and no `site` is given, the tool refuses and lists them, and the AI asks the user.
+
+**A subdomain folder belongs to the subdomain.** The parent site can list and read it, but every change under it is refused: write, edit, delete, import, attach. The AI is told to use the subdomain's own site. Each site gets its folder layout from the client area at every connection, so a subdomain added later is protected after the next connection.
 
 ## Automatic site setup
 
-The connector publishes through a jailed FTP deploy user per site, one that can reach only that site's web root. Nobody creates these by hand:
+The connector publishes through a jailed FTP deploy user per site (per domain), one that can reach only that site's folder. The main domain's user is `crsconnect@<main domain>`; the service's other domains get `crsconnect<8 hex>@<main domain>`. Nobody creates these by hand:
 
 1. The first time a client connects a site, the client area creates the deploy user on the site's hosting node. It uses the hosting control panel's API with credentials the client area already holds. If the plan's FTP account limit is reached, it raises that one account's limit by one.
 2. The new credentials travel to the connector once, inside the server-to-server code exchange. They are sealed with AES-256-GCM, with a key derived from the shared request-signing key. The connector stores the password with its own encryption key.
@@ -34,19 +49,21 @@ The connector publishes through a jailed FTP deploy user per site, one that can 
 
 If setup fails, the client sees "we're activating this site, try again in a few minutes", and nothing is half-registered.
 
-The client area also reports what happens to the hosting service, signed with the same shared key and with a timestamp and a single-use nonce:
+The client area also reports what happens to the hosting service, signed with the same shared key and with a timestamp and a single-use nonce. Each event applies to every site of the service:
 
 | Service event | Connector | Deploy user |
 |---|---|---|
 | Suspended | Publishing paused (tools say so) | Suspended |
 | Reactivated | Publishing resumed | Reactivated |
-| Terminated | Paused for good, every connection revoked | Deleted |
-| Transferred to another client | Every connection revoked | Unchanged |
+| Terminated | Paused for good, its sites taken out of every connection | Deleted |
+| Transferred to another client | Its sites taken out of every connection | Unchanged |
+
+A connection that loses all its sites this way is revoked. One that also covers sites of another service keeps working for those.
 
 ## Managing connections
 
-Clients manage access on the **AI Connect** page inside the client area. It's rendered with the client area's own theme and linked from its sidebar and from each eligible hosting service's menu. For each site it shows:
-- every AI assistant connected to it: app, permission, when it was connected and last used, and a button to **remove its access**. Removing access revokes the connection and its tokens on the connector, which ends it for sure. Disconnecting inside ChatGPT or Claude only makes the app forget its tokens.
+Clients manage access on the **AI Connect** page inside the client area. It's rendered with the client area's own theme and linked from its sidebar and from each eligible hosting service's menu. It lists each hosting service's domains, and for each site it shows:
+- every AI assistant connected to it: app, permission, when it was connected and last used, the other sites the same connection covers, and a button to **remove its access**. Removing access takes this site out of the connection on the connector, which ends access for sure; a connection left without sites is revoked with its tokens. Disconnecting inside ChatGPT or Claude only makes the app forget its tokens.
 - recent activity: drafts, publishes, undos, approvals, removed connections, settings changes, and which app did each;
 - the **Aprobar cada publicación** switch.
 
@@ -54,9 +71,11 @@ The client area checks that the signed-in client owns the service, then calls th
 
 | Endpoint | Body | Returns |
 |---|---|---|
-| `POST /client-area/api/site` | `service_id` | site, connections, recent activity |
-| `POST /client-area/api/revoke` | `service_id`, `grant_id` or `"all"` | number revoked |
-| `POST /client-area/api/settings` | `service_id`, `approve_every_publish` | the new value |
+| `POST /client-area/api/site` | `service_id`, `domain` | site, connections, recent activity |
+| `POST /client-area/api/revoke` | `service_id`, `domain`, `grant_id` or `"all"` | number of connections the site was taken out of |
+| `POST /client-area/api/settings` | `service_id`, `domain`, `approve_every_publish` | the new value |
+
+`domain` picks the site; without it, the service's main domain.
 
 ## Tokens
 
@@ -67,7 +86,7 @@ The client area checks that the signed-in client owns the service, then calls th
 
 ## Tools
 
-All tools are scoped to the connection's site and declare their MCP annotations.
+Every tool works on one of the connection's sites (see [Sites and connections](#sites-and-connections)) and declares its MCP annotations.
 
 | Kind | Tools |
 |---|---|

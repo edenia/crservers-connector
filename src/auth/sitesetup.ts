@@ -6,6 +6,8 @@ import { fromB64url, hmac, safeEqual } from '../crypto.js';
  * connects a site, the client area creates the site's jailed FTP deploy user and hands its
  * credentials over once, inside the code exchange, sealed with a key derived from REQ_KEY:
  *   "v1." b64url(iv) "." b64url(ciphertext) "." b64url(tag)   (AES-256-GCM)
+ * Deploy users are `crsconnect@<main domain>` for the main domain and `crsconnect<8 hex>@<main domain>`
+ * for the service's other domains (each jailed to that domain's folder).
  * The client area also reports service lifecycle events (suspend, terminate…) to
  * POST /client-area/events, signed with REQ_KEY.
  */
@@ -32,7 +34,7 @@ export function openSiteSetup(reqKey: Buffer, sealed: string): SiteSetup {
   const host = String(j.ftp_host ?? '').toLowerCase();
   const user = String(j.ftp_user ?? '');
   const password = String(j.ftp_password ?? '');
-  if (!HOST_RE.test(host) || !/^crsconnect@[a-z0-9.-]+$/.test(user) || password.length < 16) throw new Error('Invalid site setup');
+  if (!HOST_RE.test(host) || !/^crsconnect([0-9a-f]{8})?@[a-z0-9.-]+$/.test(user) || password.length < 16) throw new Error('Invalid site setup');
   return { ftpHost: host, ftpUser: user, ftpPassword: password };
 }
 

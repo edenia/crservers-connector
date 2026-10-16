@@ -43,7 +43,7 @@ const approvals = new ApprovalService({
   pool, sites, core, audit, openFs, preview, clientArea, appName,
   clientAreaUrl: cfg.CLIENT_AREA_URL, reqKey: fromB64url(cfg.REQ_KEY), publicUrl: cfg.PUBLIC_URL,
 });
-const clientApi = { pool, sites, audit, appName, reqKey: fromB64url(cfg.REQ_KEY), revokeGrant: (id: string) => provider.revokeGrant(id) };
+const clientApi = { pool, sites, audit, appName, reqKey: fromB64url(cfg.REQ_KEY), removeSite: (grantId: string, siteId: string) => provider.removeSite(grantId, siteId) };
 const mcp = { core, sites, preview, approvals, audit, openFs, appName };
 
 const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp, preview, approvals, clientApi, openaiAppsChallenge: cfg.OPENAI_APPS_CHALLENGE, events: { pool, sites, reqKey: fromB64url(cfg.REQ_KEY) } });

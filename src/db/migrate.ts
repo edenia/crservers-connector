@@ -219,6 +219,34 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       );
     `,
   },
+  {
+    // Several sites per hosting service (main, secondary and subdomains) and several sites per
+    // connection (docs/ARCHITECTURE.md, "Sites and connections").
+    id: '008_multi_site',
+    sql: `
+      DO $$
+      DECLARE c text;
+      BEGIN
+        FOR c IN SELECT conname FROM pg_constraint WHERE conrelid = 'sites'::regclass AND contype = 'u' AND array_length(conkey, 1) = 1 LOOP
+          EXECUTE format('ALTER TABLE sites DROP CONSTRAINT %I', c);
+        END LOOP;
+      END $$;
+      ALTER TABLE sites ADD CONSTRAINT sites_service_domain UNIQUE (service_id, domain);
+      ALTER TABLE sites ADD COLUMN kind text NOT NULL DEFAULT 'main' CHECK (kind IN ('main', 'secondary', 'subdomain'));
+      -- Folders of this site that are other sites (subdomains live inside their parent's folder).
+      ALTER TABLE sites ADD COLUMN protected_dirs text[] NOT NULL DEFAULT '{}';
+
+      CREATE TABLE grant_sites (
+        grant_id uuid NOT NULL REFERENCES grants(id) ON DELETE CASCADE,
+        site_id  uuid NOT NULL REFERENCES sites(id),
+        PRIMARY KEY (grant_id, site_id)
+      );
+      CREATE INDEX grant_sites_site ON grant_sites (site_id);
+      INSERT INTO grant_sites (grant_id, site_id) SELECT id, site_id FROM grants;
+      -- Kept as the connection's first site, for reading old rows; grant_sites is the source of truth.
+      ALTER TABLE grants ALTER COLUMN site_id DROP NOT NULL;
+    `,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

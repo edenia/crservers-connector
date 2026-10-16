@@ -28,7 +28,7 @@ export interface McpDeps {
   /** Creates preview links for drafts. */
   preview?: Pick<PreviewService, 'createLink'>;
   /** Big changes go to the site owner's approval link instead of going live from the chat. */
-  approvals?: Pick<ApprovalService, 'request' | 'latest'>;
+  approvals?: Pick<ApprovalService, 'request' | 'latest' | 'siteOfDraft'>;
   /** Downloads for import_from_url (public addresses only). Tests inject a fake. */
   fetchUrl?: UrlFetcher;
 }
@@ -123,7 +123,8 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     if (!sites.length) return fail('Este acceso ya no es válido. / This connection is no longer valid.');
     let site: Site | undefined;
     if (pick.changesetId) {
-      const id = await deps.core.draftSiteId(pick.changesetId);
+      // A published draft is gone; if it went through approval, that record still knows its site.
+      const id = (await deps.core.draftSiteId(pick.changesetId)) ?? (await deps.approvals?.siteOfDraft(pick.changesetId));
       site = sites.find((s) => s.id === id);
       if (!site) return fail(`${ERROR_TEXT.not_found} Draft not found`);
     } else {

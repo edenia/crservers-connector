@@ -136,6 +136,12 @@ export class ApprovalService {
   }
 
   /** The most recent approval for a draft, whatever its version. */
+  /** The site of a draft that went through approval (the draft itself is gone once published). */
+  async siteOfDraft(draftId: string): Promise<string | undefined> {
+    if (!/^[0-9a-f-]{36}$/i.test(draftId)) return undefined;
+    return (await this.d.pool.query('SELECT site_id FROM approvals WHERE draft_id = $1 LIMIT 1', [draftId])).rows[0]?.site_id;
+  }
+
   async latest(draftId: string, siteId: string): Promise<ApprovalRow | undefined> {
     return (await this.d.pool.query('SELECT * FROM approvals WHERE draft_id = $1 AND site_id = $2 ORDER BY created_at DESC LIMIT 1', [draftId, siteId])).rows[0];
   }

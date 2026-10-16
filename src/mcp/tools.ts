@@ -165,11 +165,17 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     return null;
   };
 
+  // Claude's directory reads a tool's display name from annotations.title (MCP also has a top-level title):
+  // copy it there for every tool.
+  const register = server.registerTool.bind(server) as (n: string, c: unknown, f: unknown) => unknown;
+  const registerTool = ((name: string, config: { title?: string; annotations?: Record<string, unknown> }, cb: unknown) =>
+    register(name, { ...config, annotations: { ...config.annotations, title: config.title } }, cb)) as typeof server.registerTool;
+
   const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
   const DRAFT = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
   const LIVE = { readOnlyHint: false, destructiveHint: true, idempotentHint: false, openWorldHint: true };
 
-  server.registerTool(
+  registerTool(
     'list_sites',
     { title: 'List sites', description: 'The sites (domains) this connection can work on. When there are several, pass site to the tools that take it.', annotations: RO },
     async (_a) => {
@@ -181,7 +187,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     },
   );
 
-  server.registerTool('get_site_info', { title: 'Site info', description: 'Domain, live URL, permission and latest release.', inputSchema: { site: SITE }, annotations: RO }, (a) =>
+  registerTool('get_site_info', { title: 'Site info', description: 'Domain, live URL, permission and latest release.', inputSchema: { site: SITE }, annotations: RO }, (a) =>
     run({ site: a.site }, async ({ site, permission }, fs) => {
       const latest = (await deps.core.listReleases(site.id))[0];
       const marker = await readDeployMarker(await fs());
@@ -197,7 +203,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     })(),
   );
 
-  server.registerTool('get_usage_limits', { title: 'Usage limits', description: 'Size caps and allowed file types.', annotations: RO }, async (_a) =>
+  registerTool('get_usage_limits', { title: 'Usage limits', description: 'Size caps and allowed file types.', annotations: RO }, async (_a) =>
       ok('Límites', {
         max_file_mb: 25,
         max_video_mb: 100,
@@ -209,7 +215,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       }),
   );
 
-  server.registerTool(
+  registerTool(
     'list_files',
     {
       title: 'List files',
@@ -231,7 +237,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       })(),
   );
 
-  server.registerTool(
+  registerTool(
     'read_file',
     {
       title: 'Read file',
@@ -263,7 +269,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       })(),
   );
 
-  server.registerTool(
+  registerTool(
     'edit_file',
     {
       title: 'Edit file in draft',
@@ -298,7 +304,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       })(),
   );
 
-  server.registerTool(
+  registerTool(
     'start_changeset',
     { title: 'Start draft', description: 'Creates a new draft on CR Servers, based on the live site, where changes are saved before publishing (kept up to 24 hours). The live site doesn\'t change until publish.', inputSchema: { note: z.string().max(500).optional(), site: SITE }, annotations: DRAFT },
     (a) =>
@@ -316,7 +322,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       })(),
   );
 
-  server.registerTool(
+  registerTool(
     'write_files',
     {
       title: 'Write files to draft',
@@ -343,7 +349,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       })(),
   );
 
-  server.registerTool(
+  registerTool(
     'import_from_url',
     {
       title: 'Import file from a link',
@@ -369,7 +375,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       })(),
   );
 
-  server.registerTool(
+  registerTool(
     'add_attachments',
     {
       title: 'Add attached files to draft',
@@ -405,7 +411,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       })(),
   );
 
-  server.registerTool(
+  registerTool(
     'delete_files',
     { title: 'Delete files in draft', description: 'Marks files for deletion and saves that to the draft stored on CR Servers. The files are deleted from the live site only when the draft is published.', inputSchema: { changeset_id: z.string(), paths: z.array(z.string()).min(1).max(500) }, annotations: DRAFT },
     (a) =>
@@ -417,7 +423,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       })(),
   );
 
-  server.registerTool(
+  registerTool(
     'preview_changeset',
     {
       title: 'Preview draft',
@@ -439,7 +445,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       })(),
   );
 
-  server.registerTool(
+  registerTool(
     'publish',
     {
       title: 'Publish draft',
@@ -491,7 +497,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       })(),
   );
 
-  server.registerTool('list_releases', { title: 'List releases', description: 'The last 5 publishes and reverts, newest first. Each can be reverted.', inputSchema: { site: SITE }, annotations: RO }, (a) =>
+  registerTool('list_releases', { title: 'List releases', description: 'The last 5 publishes and reverts, newest first. Each can be reverted.', inputSchema: { site: SITE }, annotations: RO }, (a) =>
     run({ site: a.site }, async ({ site }) => {
       const rels = await deps.core.listReleases(site.id);
       return ok(`${rels.length} versiones en el historial. / ${rels.length} releases.`, {
@@ -500,7 +506,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     })(),
   );
 
-  server.registerTool(
+  registerTool(
     'revert_release',
     {
       title: 'Revert release',
@@ -520,7 +526,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       })(),
   );
 
-  server.registerTool(
+  registerTool(
     'get_activity_log',
     { title: 'Activity log', description: 'Recent changes made through the connector.', inputSchema: { limit: z.number().int().min(1).max(100).default(20), site: SITE }, annotations: RO },
     (a) =>
@@ -532,7 +538,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       })(),
   );
 
-  server.registerTool(
+  registerTool(
     'discard_changeset',
     { title: 'Discard draft', description: 'Drops a draft and its staged files. The live site is not touched.', inputSchema: { changeset_id: z.string() }, annotations: { ...DRAFT, destructiveHint: true } },
     (a) =>

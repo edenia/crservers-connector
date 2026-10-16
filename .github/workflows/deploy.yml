@@ -83,27 +83,33 @@ jobs:
           ENCRYPTION_KEY: ${{ secrets.ENCRYPTION_KEY }}
         run: |
           set -euo pipefail
+          # The cluster API sometimes times out serving its schema to runners: retry (files, not stdin, so a retry can re-read them).
+          kapply() { for i in 1 2 3; do kubectl apply --request-timeout=120s -n "$NAMESPACE" "$@" && return 0; echo "kubectl apply failed (attempt $i), retrying" >&2; sleep 15; done; return 1; }
+          umask 077; T=$(mktemp -d)
           kubectl -n "$NAMESPACE" create secret generic connector-postgres \
             --from-literal=POSTGRES_PASSWORD="$POSTGRES_PASSWORD" \
-            --dry-run=client -o yaml | kubectl apply -n "$NAMESPACE" -f -
+            --dry-run=client -o yaml > "$T/postgres-secret.yml"
           kubectl -n "$NAMESPACE" create secret generic connector-secrets \
             --from-literal=DATABASE_URL="postgres://connector:${POSTGRES_PASSWORD}@postgres.${NAMESPACE}.svc:5432/connector" \
             --from-literal=CLIENT_AREA_API_ID="$CLIENT_AREA_API_ID" \
             --from-literal=CLIENT_AREA_API_KEY="$CLIENT_AREA_API_KEY" \
             --from-literal=REQ_KEY="$REQ_KEY" \
             --from-literal=ENCRYPTION_KEY="$ENCRYPTION_KEY" \
-            --dry-run=client -o yaml | kubectl apply -n "$NAMESPACE" -f -
+            --dry-run=client -o yaml > "$T/secrets.yml"
+          kapply -f "$T/postgres-secret.yml" -f "$T/secrets.yml"
+          rm -rf "$T"
 
       - name: Render and apply manifests
         run: |
           set -euo pipefail
+          kapply() { for i in 1 2 3; do kubectl apply --request-timeout=120s -n "$NAMESPACE" "$@" && return 0; echo "kubectl apply failed (attempt $i), retrying" >&2; sleep 15; done; return 1; }
           test -n "$INGRESS_HOST" && test -n "$CLIENT_AREA_URL"
           mkdir -p build_k8s
           for f in k8s/*.yml; do envsubst '${IMAGE} ${VERSION} ${INGRESS_HOST} ${CLIENT_AREA_URL} ${EXTRA_REDIRECT_URIS} ${OPENAI_APPS_CHALLENGE}' < "$f" > "build_k8s/$(basename "$f")"; done
-          kubectl apply -n "$NAMESPACE" -f build_k8s/postgres.yml
+          kapply -f build_k8s/postgres.yml
           kubectl -n "$NAMESPACE" rollout status statefulset/connector-postgres --timeout=300s
-          kubectl apply -n "$NAMESPACE" -f build_k8s/app.yml -f build_k8s/ingress.yml
-          if [ "$BACKUPS" != "off" ]; then kubectl apply -n "$NAMESPACE" -f build_k8s/backup.yml; fi
+          kapply -f build_k8s/app.yml -f build_k8s/ingress.yml
+          if [ "$BACKUPS" != "off" ]; then kapply -f build_k8s/backup.yml; fi
           kubectl -n "$NAMESPACE" rollout status deployment/connector --timeout=300s
 
       - name: Smoke test

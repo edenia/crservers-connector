@@ -338,6 +338,9 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     );
     for (const t of tools) {
       expect(t.annotations, t.name).toMatchObject({ readOnlyHint: expect.any(Boolean), destructiveHint: expect.any(Boolean), openWorldHint: expect.any(Boolean) });
+      // Claude's directory reads the display name from annotations.title.
+      expect(t.annotations?.title, t.name).toBe(t.title);
+      expect(t.title, t.name).toBeTruthy();
     }
     expect(byName.publish!.annotations).toMatchObject({ destructiveHint: true, openWorldHint: true, readOnlyHint: false });
     expect(byName.read_file!.annotations).toMatchObject({ readOnlyHint: true });

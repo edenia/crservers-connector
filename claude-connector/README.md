@@ -4,7 +4,7 @@ Everything to enter in Anthropic's developer portal ([claude.ai/directory/manage
 
 ## Before submitting
 
-- [ ] Connector release with loopback callbacks deployed (PR #39), so Claude Code can connect.
+- [x] Connector v0.7.3 deployed: loopback callbacks (Claude Code), annotations.title, app icon.
 - [ ] Tested as a custom connector in Claude (claude.ai → Settings → Connectors → Add custom connector → `https://connect.crservers.com/mcp`): every tool called once from a chat, with the review account.
 - [ ] Tested in Claude Code: `claude mcp add --transport http crservers https://connect.crservers.com/mcp`, then sign in and list files.
 - [ ] Review account `review@crservers.com` working, test.crservers.com heading reads "Welcome to our test site".
@@ -12,26 +12,29 @@ Everything to enter in Anthropic's developer portal ([claude.ai/directory/manage
 
 ## Portal steps
 
+The portal keeps a draft only in the browser tab (**"Draft saved in this tab"**). **Save and exit** doesn't create a submission, and the draft can be lost, so enter everything in one sitting: test first, then fill all 10 steps and submit.
+
 ### 1. Connection
 
-Universal URL: `https://connect.crservers.com/mcp`
+- **Server URL:** `https://connect.crservers.com/mcp`. The portal should show *CR Servers · 17 tools · 0 resources · Auth OAuth*.
+- **Users connect to different URLs:** leave unchecked.
 
 ### 2. Tools
 
-17 tools sync from the server. Each has a `title` and explicit annotations: read-only tools `readOnlyHint: true`; draft tools change only the server-side draft; `publish`, `revert_release` and `discard_changeset` are `destructiveHint: true`. No tool should be flagged.
+17 tools, each with `annotations.title` (since v0.7.2) and explicit hints. Ignore the "Reference the target API docs" suggestion: it's for tools that send raw API requests, and ours call fixed operations.
 
 ### 3. Listing
 
 | Field | Value |
 |---|---|
-| Server name (≤100) | CR Servers AI Connect |
-| One-liner (≤200) | Edit and publish your CR Servers-hosted website from Claude, with a private preview before anything goes live and one-step undo. |
-| Categories | Developer tools; Productivity (closest available) |
-| Documentation URL | https://crservers.com/support/hosting/ai-connect |
-| Privacy policy URL | https://crservers.com/privacy#ai-connect |
-| Support contact | support@crservers.com |
-| Icon | `chatgpt-app/assets/logo.png` (256×256 PNG) |
-| URL slug (permanent) | `crservers-ai-connect` |
+| Name | CR Servers AI Connect |
+| Slug (permanent) | `crservers-ai-connect` |
+| One-liner | Edit and publish your CR Servers-hosted website from Claude, with a private preview before anything goes live and one-step undo. |
+| Description | The text below |
+| Categories | Development tools; Productivity |
+| Author name | CR Servers |
+| Author URL | https://crservers.com |
+| Icon | Leave blank (the server serves `/favicon.ico`), or `https://connect.crservers.com/icon.png`. Not `crservers.com/icon.png`: the website blocks cross-origin image loads. |
 
 Description (≤2000):
 
@@ -50,46 +53,69 @@ Description (≤2000):
 
 ### 4. Use cases
 
-- **Primary use cases:** update an existing website (text, prices, images, pages); build a simple site from scratch; preview changes privately; publish after confirmation; undo a publish.
-- **What users need first:** an active CR Servers shared hosting service with a file-based website, and a CR Servers client area account.
-- **Reads or writes:** both. Reads the site's files; writes to a draft; publishes to the live site only through `publish` after the user confirms.
+| Use case | Example prompt |
+|---|---|
+| Update text or prices on a website | Change the price of the 1,000 m² lot on my home page to $45,000 and show me a preview. |
+| Add a photo to a page | Add this image to my homepage below the main heading: https://crservers.com/icon.png |
+| Publish or undo a change | Looks good, publish it. Then undo that change. |
+
+- **Prerequisites:** An active CR Servers shared hosting service with a file-based website (HTML, CSS, JavaScript, images), and a CR Servers client area account that owns it. On first connection the user signs in to the client area, ticks the sites Claude may work on, and chooses "Edit and publish" or "Preview only". Reviewers: use the test account in Test & launch (site test.crservers.com).
+- **Read/write:** Read and write.
 
 ### 5. Company
 
-- Company: Sistemas Edenia Internacional S.A. (CR Servers)
-- Website: https://crservers.com
-- Primary contact: entered in the portal by the submitter.
+- **Company name:** Sistemas Edenia Internacional S.A. (CR Servers)
+- **Website:** https://crservers.com
+- **Primary contact:** the submitter's name, email and role.
+- **Anthropic contact:** blank.
 
 ### 6. Authentication
 
-OAuth 2.0 with **client ID metadata documents** (DCR also supported as a fallback). PKCE S256, refresh tokens rotate, 1-hour access tokens. Callbacks: `https://claude.ai/api/mcp/auth_callback` and loopback (Claude Code). Sign-in and consent happen in the CR Servers client area.
+The portal detects it, so keep what it shows:
+- **Requirement:** Always required.
+- **OAuth client:** Client ID Metadata Document.
+- **Headers:** none.
 
 ### 7. Data handling
 
-- API: **our own** (CR Servers hosting, first-party).
-- Personal health data: no. Sponsored content: no.
+- **API:** our own (first-party).
+- **Personal health data:** no.
+- **Sponsored content:** no.
 
-### 8. Test & launch (reviewer instructions)
+### 8. Test & launch
 
-Credentials go only in the portal field, never in this file.
+Paste this into **Test setup instructions**. Replace `[PASSWORD]` in the portal only, never in this file.
 
-1. Add the connector (`https://connect.crservers.com/mcp`) and click **Connect**. The CR Servers client area sign-in page opens.
-2. Sign in with the review account (`review@crservers.com`, password in the portal). No 2FA; invisible reCAPTCHA, so please use a normal browser session.
-3. On the consent screen, keep **test.crservers.com** ticked, choose **Edit and publish**, and click **Allow**.
-4. Try:
-   - "Show me the files on my website." (`list_sites`, `list_files`)
-   - "Change the main heading on my home page to "Hello from Claude" and give me a preview link." (`start_changeset`, `read_file`, `edit_file`, `preview_changeset`)
-   - "Looks good, publish it." (`publish`; Claude asks for confirmation)
-   - "Undo that change." (`list_releases`, `revert_release`)
-   - "Add this image to my site as img/review.png: https://crservers.com/icon.png" (`import_from_url`)
-5. Out of scope, expected to be declined: DNS changes, uploading PHP, billing.
+```
+Server: https://connect.crservers.com/mcp (OAuth sign-in through the CR Servers client area; the account below already exists, no sign-up needed).
+
+Test account (dedicated to reviews, owns one test website, test.crservers.com):
+- Email: review@crservers.com
+- Password: [PASSWORD]
+- No 2FA. The sign-in page uses invisible reCAPTCHA, so please use a normal browser session.
+
+Steps:
+1. Add the connector and click Connect. The CR Servers client area sign-in page opens.
+2. Sign in with the test account.
+3. On "Connect your AI assistant", keep test.crservers.com ticked, choose "Edit and publish", and click Allow.
+4. In a new chat, try (tools in brackets):
+   - "Which sites can you work on? Show me the files on my website." (list_sites, get_site_info, get_usage_limits, list_files)
+   - "Change the main heading on my home page to "Hello from Claude" and give me a preview link." (start_changeset, read_file, edit_file, preview_changeset)
+   - "Looks good, publish it." (publish; asks for confirmation)
+   - "Undo that change." (list_releases, revert_release)
+   - "Add this image to my site as img/review.png and show me a preview: https://crservers.com/icon.png" (import_from_url, preview_changeset)
+   - "Create a page about.html that says hello, then delete it from the draft and discard the draft." (write_files, delete_files, discard_changeset)
+   - "Show me the activity log." (get_activity_log)
+5. Out of scope, expected to be declined: changing DNS records, uploading PHP, anything about billing.
 
 Notes:
-- The test cases only change test.crservers.com; please undo publishes so the heading returns to "Welcome to our test site".
-- `add_attachments` receives files attached in ChatGPT (OpenAI file parameters). In Claude, images come in through `import_from_url`.
-- Preview links are private and expire after an hour.
+- The tests only change test.crservers.com. Please undo publishes so the heading returns to "Welcome to our test site".
+- add_attachments receives files attached in ChatGPT (OpenAI file parameters). In Claude, images come in with import_from_url.
+- Preview links are private and expire after one hour.
+- Docs: https://crservers.com/support/hosting/ai-connect
+```
 
-Confirm: every tool has been run through a custom connector in Claude.
+**Self-tested:** tick it only after running the prompts above as a custom connector in Claude (Settings → Connectors → Add custom connector).
 
 ### 9. Compliance
 

@@ -8,7 +8,7 @@ Everything needed to submit AI Connect to the ChatGPT plugin directory. The ZIP 
 - [ ] `OPENAI_APPS_CHALLENGE` set as a production environment variable (token from the submission dashboard), deployed; `https://connect.crservers.com/.well-known/openai-apps-challenge` returns it.
 - [ ] Privacy policy AI Connect section live at `https://crservers.com/privacy#ai-connect` (both languages).
 - [ ] Reviewer account ready (below), tested in a fresh browser profile.
-- [ ] Demo video recorded (script below); its URL set in `plugin.json` → `review.demo_recording_url`.
+- [x] Demo video recorded (script below); its URL set in `plugin.json` → `review.demo_recording_url` (https://youtu.be/8MqeqsitW-8, unlisted).
 - [ ] `./build-zip.sh` → upload `crservers-ai-connect.zip`, fix anything the automatic scans report, fill **Review details**, submit.
 
 The MCP origin `https://connect.crservers.com` can't change after submission.

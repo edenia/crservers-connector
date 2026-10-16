@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "crservers-ai-connect",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Publish changes to your CR Servers-hosted website from ChatGPT, with a private preview first and one-step undo.",
   "author": {
     "name": "CR Servers",
@@ -98,7 +98,7 @@
             }
           ]
         },
-        "demo_recording_url": "https://example.invalid/REPLACE-WITH-DEMO-VIDEO-URL",
+        "demo_recording_url": "https://youtu.be/8MqeqsitW-8",
         "commerce": false,
         "commerce_description": "This app does not sell products or process payments. It publishes changes to the user's existing CR Servers website."
       },

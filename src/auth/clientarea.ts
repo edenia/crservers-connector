@@ -5,6 +5,7 @@
  */
 export interface ClientAreaGrant {
   client_id: number;
+  /** The first chosen site (approve: the service being approved). */
   account_id: number;
   domain: string;
   server_id: string;
@@ -12,6 +13,37 @@ export interface ClientAreaGrant {
   scope: 'preview' | 'publish' | 'approve';
   /** First connection of a site: its new deploy user's credentials, sealed (see sitesetup.ts). */
   site_setup?: string;
+  /** Every site the client chose for this connection (client area 0.6+; older ones send one site at the top level). */
+  sites?: ClientAreaSite[];
+}
+
+/** One chosen site: a domain of a hosting service. */
+export interface ClientAreaSite {
+  account_id: number;
+  domain: string;
+  kind?: 'main' | 'secondary' | 'subdomain';
+  /** Folders of this site that are other sites (subdomains), relative to its root. */
+  protected_dirs?: string[];
+  site_setup?: string;
+}
+
+export const MAX_SITES_PER_CONNECTION = 25;
+const DOMAIN_RE = /^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$/;
+const DIR_RE = /^[A-Za-z0-9._-]+(\/[A-Za-z0-9._-]+)*$/;
+
+/** Validates the client area's `sites` list; throws on anything unexpected. */
+export function parseSites(raw: unknown): ClientAreaSite[] {
+  if (!Array.isArray(raw) || raw.length < 1 || raw.length > MAX_SITES_PER_CONNECTION) throw new Error('Unexpected client area sites list');
+  return raw.map((x) => {
+    const e = (x ?? {}) as Record<string, unknown>;
+    const domain = String(e.domain ?? '').toLowerCase();
+    const kind = e.kind === 'main' || e.kind === 'secondary' || e.kind === 'subdomain' ? e.kind : undefined;
+    const dirs = Array.isArray(e.protected_dirs) ? e.protected_dirs.map(String) : [];
+    if (typeof e.account_id !== 'number' || !DOMAIN_RE.test(domain) || !kind || dirs.length > 100 || dirs.some((d) => !DIR_RE.test(d) || d.split('/').some((p) => p === '.' || p === '..'))) {
+      throw new Error('Unexpected client area site entry');
+    }
+    return { account_id: e.account_id, domain, kind, protected_dirs: dirs, ...(typeof e.site_setup === 'string' && e.site_setup ? { site_setup: e.site_setup } : {}) };
+  });
 }
 
 export interface ClientAreaApi {
@@ -50,6 +82,7 @@ export class ClientAreaClient implements ClientAreaApi {
     return {
       client_id: j.client_id, account_id: j.account_id, domain: j.domain, server_id: String(j.server_id ?? ''), scope,
       ...(typeof j.site_setup === 'string' && j.site_setup ? { site_setup: j.site_setup } : {}),
+      ...(j.sites !== undefined ? { sites: parseSites(j.sites) } : {}),
     };
   }
 }

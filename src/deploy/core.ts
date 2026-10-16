@@ -124,6 +124,11 @@ export class DeployCore {
     return draft;
   }
 
+  /** Which site a draft belongs to (undefined when unknown). Callers still pass that site to every method. */
+  async draftSiteId(draftId: string): Promise<string | undefined> {
+    return this.drafts.siteOf(draftId);
+  }
+
   async getDraft(draftId: string, siteId: string): Promise<Draft> {
     const d = await this.drafts.get(draftId);
     if (!d || d.siteId !== siteId) throw new DeployError('not_found', 'Draft not found');

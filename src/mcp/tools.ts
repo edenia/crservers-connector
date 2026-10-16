@@ -56,7 +56,7 @@ type Ctx = { site: Site; permission: 'preview' | 'publish'; clientId: string };
 /** Which site a tool call works on: a draft's, or a domain the AI named. */
 type SitePick = { changesetId?: string; site?: string };
 
-const SITE = z.string().max(253).optional().describe('Domain of the site to work on, e.g. "example.com". Needed only when the connection covers several sites (see list_sites); then use the site the user named, and ask them if they haven't.');
+const SITE = z.string().max(253).optional().describe('Domain of the site to work on, e.g. "example.com". Needed only when the connection covers several sites (see list_sites); then use the site the user named, and ask them if they have not named one.');
 
 /** "https://www.Example.com/x" → "www.example.com". */
 function normalizeDomain(raw: string): string {

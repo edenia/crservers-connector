@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { DeployCore, DeployError } from '../deploy/core.js';
 import { ImportError, assertMediaMatches, fetchPublicUrl, type UrlFetcher } from '../deploy/fetchurl.js';
 import { MB, PathError, maxFileBytes, normalizeSitePath } from '../deploy/paths.js';
+import { deployNote, deployedFrom, readDeployMarker } from '../deploy/deploymarker.js';
 import type { AuditLog } from '../deploy/pgstores.js';
 import type { SiteFs } from '../deploy/sitefs.js';
 import type { PreviewService } from '../preview/preview.js';
@@ -181,14 +182,16 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
   );
 
   server.registerTool('get_site_info', { title: 'Site info', description: 'Domain, live URL, permission and latest release.', inputSchema: { site: SITE }, annotations: RO }, (a) =>
-    run({ site: a.site }, async ({ site, permission }) => {
+    run({ site: a.site }, async ({ site, permission }, fs) => {
       const latest = (await deps.core.listReleases(site.id))[0];
+      const marker = await readDeployMarker(await fs());
       return ok(`${site.domain} (${permission === 'publish' ? 'editar y publicar' : 'solo vista previa'})`, {
         domain: site.domain,
         type: site.kind,
         live_url: `https://${site.domain}/`,
         permission,
         ...(site.protectedDirs.length ? { other_site_folders: site.protectedDirs } : {}),
+        ...(marker ? { deployed_from_github: deployedFrom(marker), note: deployNote(marker) } : {}),
         latest_release: latest ? { release: latest.number, when: latest.createdAt, cause: latest.cause } : null,
       });
     })(),
@@ -300,9 +303,16 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     { title: 'Start draft', description: 'Creates a new draft on CR Servers, based on the live site, where changes are saved before publishing (kept up to 24 hours). The live site doesn\'t change until publish.', inputSchema: { note: z.string().max(500).optional(), site: SITE }, annotations: DRAFT },
     (a) =>
       run({ site: a.site }, async ({ site, clientId }, fs) => {
-        const d = await deps.core.startDraft(site.id, await fs(), a.note);
+        const f = await fs();
+        const d = await deps.core.startDraft(site.id, f, a.note);
         await deps.audit.add(site.id, clientId, 'start_changeset', { changeset_id: d.id });
-        return ok(`Borrador creado para ${site.domain}. / Draft started for ${site.domain}.`, { changeset_id: d.id, site: site.domain, expires_at: d.expiresAt });
+        const marker = await readDeployMarker(f);
+        return ok(`Borrador creado para ${site.domain}. / Draft started for ${site.domain}.${marker ? `\n\n${deployNote(marker)}` : ''}`, {
+          changeset_id: d.id,
+          site: site.domain,
+          expires_at: d.expiresAt,
+          ...(marker ? { deployed_from_github: deployedFrom(marker), note: deployNote(marker) } : {}),
+        });
       })(),
   );
 
@@ -468,12 +478,15 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
             );
           }
         }
-        const rel = await deps.core.publish(a.changeset_id, site.id, await fs(), clientId);
-        await deps.audit.add(site.id, clientId, 'publish', { release: rel.number, files: rel.files.map((f) => f.path) });
-        return ok(`Publicado como versión #${rel.number}. Para deshacer: "revierta la versión #${rel.number}". / Published as release #${rel.number}.`, {
+        const f = await fs();
+        const rel = await deps.core.publish(a.changeset_id, site.id, f, clientId);
+        await deps.audit.add(site.id, clientId, 'publish', { release: rel.number, files: rel.files.map((x) => x.path) });
+        const marker = await readDeployMarker(f);
+        return ok(`Publicado como versión #${rel.number}. Para deshacer: "revierta la versión #${rel.number}". / Published as release #${rel.number}.${marker ? `\n\n${deployNote(marker)}` : ''}`, {
           release: rel.number,
           live_url: `https://${site.domain}/`,
           files_changed: rel.files.length,
+          ...(marker ? { deployed_from_github: deployedFrom(marker), note: deployNote(marker) } : {}),
         });
       })(),
   );

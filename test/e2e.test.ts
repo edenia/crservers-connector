@@ -1041,6 +1041,24 @@ describe('edit_file removals', () => {
   });
 });
 
+describe('sites published from GitHub (Static Deploy marker)', () => {
+  it('get_site_info, start_changeset and publish say the next deploy replaces changes made here', async () => {
+    await siteFs.write('.htcrservers-deploy.json', Buffer.from(JSON.stringify({ tool: 'crservers-static-deploy', repository: 'acme/uat-site', commit: 'abcdef1234567890', deployed_at: '2026-10-16T18:00:00Z' })));
+    try {
+      const c = await mcpClient(await connect('publish'));
+      const info = await call(c, 'get_site_info');
+      expect(info.data.deployed_from_github).toMatchObject({ repository: 'acme/uat-site', commit: 'abcdef123456' });
+      expect(info.data.note).toContain('next deploy');
+      const d = await call(c, 'start_changeset');
+      expect(d.text).toContain('acme/uat-site');
+      await call(c, 'discard_changeset', { changeset_id: d.data.changeset_id });
+      await c.close();
+    } finally {
+      siteFs.files.delete('.htcrservers-deploy.json');
+    }
+  });
+});
+
 describe('backup files in the web root', () => {
   it('list_files flags backup-looking files with a suggestion', async () => {
     siteFs.put('index.html.bak-20260723', 'old');

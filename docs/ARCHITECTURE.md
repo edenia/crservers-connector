@@ -39,6 +39,14 @@ A **connection** is one AI app authorized by one client for one or more sites, w
 
 **A subdomain folder belongs to the subdomain.** The parent site can list and read it, but every change under it is refused: write, edit, delete, import, attach. The AI is told to use the subdomain's own site. Each site gets its folder layout from the client area at every connection, so a subdomain added later is protected after the next connection.
 
+### Sites published from GitHub
+
+A site can also be published from a GitHub repository with **CR Servers Static Deploy** (edenia/crservers-static-deploy). Each deploy uploads `.htcrservers-deploy.json` with the repository, commit, ref and time:
+- **Never served on the web:** Apache refuses every `.ht*` file.
+- **Read-only for the AI:** it can't write or delete dot-files.
+
+When the marker is there, `get_site_info`, `start_changeset` and `publish` include `deployed_from_github` and a note: the next deploy from that repository replaces files changed through AI Connect, so the user should also make the change in the repository. Nothing else changes. The usual conflict and drift checks still stop AI Connect from overwriting files a deploy changed.
+
 ## Automatic site setup
 
 The connector publishes through a jailed FTP deploy user per site (per domain), one that can reach only that site's folder. The main domain's user is `crsconnect@<main domain>`; the service's other domains get `crsconnect<8 hex>@<main domain>`. Nobody creates these by hand:

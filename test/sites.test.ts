@@ -3,7 +3,7 @@ import { parseSites } from '../src/auth/clientarea.js';
 import { chooseSite } from '../src/mcp/tools.js';
 import type { Site } from '../src/sites.js';
 
-const site = (domain: string): Site => ({ id: domain, serviceId: 1, domain, kind: 'main', status: 'active', approveEveryPublish: false, protectedDirs: [] });
+const site = (domain: string): Site => ({ id: domain, serviceId: 1, domain, kind: 'main', status: 'active', approveEveryPublish: false, protectedDirs: [], layoutCheckedAt: null });
 
 describe('client area sites list', () => {
   it('accepts main, secondary and subdomain entries', () => {

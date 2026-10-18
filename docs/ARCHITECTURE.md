@@ -37,7 +37,7 @@ A **connection** is one AI app authorized by one client for one or more sites, w
 - Tools that work on a draft use that draft's site.
 - The other tools take an optional `site` (the domain). When a connection has several sites and no `site` is given, the tool refuses and lists them, and the AI asks the user.
 
-**A subdomain folder belongs to the subdomain.** The parent site can list and read it, but every change under it is refused: write, edit, delete, import, attach. The AI is told to use the subdomain's own site. Each site gets its folder layout from the client area at every connection, so a subdomain added later is protected after the next connection.
+**A subdomain folder belongs to the subdomain.** The parent site can list and read it, but every change under it is refused: write, edit, delete, import, attach. The AI is told to use the subdomain's own site. Each site gets its folder layout from the client area at every connection, and the connector asks again (`fn=layout`, one call per hosting service, client area 0.7+) whenever the stored layout is more than 5 minutes old. Drafting falls back to the stored layout if the client area can't answer; `publish`, `revert_release` and browser approvals refuse instead (nothing goes live), and re-check every file they touch against the fresh layout. So a subdomain created after connecting is protected without reconnecting (`src/auth/layout.ts`).
 
 ### Sites published from GitHub
 

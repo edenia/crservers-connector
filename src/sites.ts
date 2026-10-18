@@ -20,9 +20,11 @@ export interface Site {
   approveEveryPublish: boolean;
   /** Folders of this site that hold other sites (a subdomain's files live inside its parent's folder). */
   protectedDirs: string[];
+  /** When the client area last confirmed kind and protectedDirs (null: only stored at sign-in). */
+  layoutCheckedAt: Date | null;
 }
 
-const COLS = 'id, service_id, domain, kind, status, approve_every_publish, protected_dirs';
+const COLS = 'id, service_id, domain, kind, status, approve_every_publish, protected_dirs, layout_checked_at';
 
 export class SiteRepo {
   constructor(
@@ -80,7 +82,7 @@ export class SiteRepo {
 
   /** The hosting layout as the client area saw it at this connection (subdomains can come and go). */
   async setLayout(siteId: string, kind: SiteKind, protectedDirs: string[]): Promise<void> {
-    await this.pool.query('UPDATE sites SET kind = $2, protected_dirs = $3 WHERE id = $1', [siteId, kind, protectedDirs]);
+    await this.pool.query('UPDATE sites SET kind = $2, protected_dirs = $3, layout_checked_at = now() WHERE id = $1', [siteId, kind, protectedDirs]);
   }
 
   /** Every site of the service (lifecycle events apply to the whole hosting service). */
@@ -97,7 +99,7 @@ export class SiteRepo {
   }
 }
 
-type Row = { id: string; service_id: number; domain: string; kind: SiteKind; status: Site['status']; approve_every_publish: boolean; protected_dirs: string[] | null };
+type Row = { id: string; service_id: number; domain: string; kind: SiteKind; status: Site['status']; approve_every_publish: boolean; protected_dirs: string[] | null; layout_checked_at: Date | null };
 
 function toSite(row: Row): Site {
   return {
@@ -108,5 +110,6 @@ function toSite(row: Row): Site {
     status: row.status,
     approveEveryPublish: row.approve_every_publish,
     protectedDirs: row.protected_dirs ?? [],
+    layoutCheckedAt: row.layout_checked_at ?? null,
   };
 }

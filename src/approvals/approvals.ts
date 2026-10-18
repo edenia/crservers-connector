@@ -2,6 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { Request, Response } from 'express';
 import type { Pool } from 'pg';
 import type { ClientAreaApi } from '../auth/clientarea.js';
+import { LayoutUnavailable, type LayoutSync } from '../auth/layout.js';
 import { signReq } from '../auth/req.js';
 import { hashToken, randomToken, safeEqual } from '../crypto.js';
 import { DeployError, type DeployCore } from '../deploy/core.js';
@@ -69,6 +70,8 @@ export interface ApprovalDeps {
   reqKey: Buffer;
   publicUrl: string;
   appName?: (clientId: string) => Promise<string>;
+  /** Re-checks the site's subdomain folders before publishing (src/auth/layout.ts). */
+  layout?: Pick<LayoutSync, 'fresh'>;
 }
 
 const T = {
@@ -95,6 +98,7 @@ const T = {
     conflictBody: 'Algunos archivos cambiaron en el sitio mientras tanto, así que no publicamos nada. Pídale a su asistente que rehaga el cambio.',
     failedTitle: 'No se pudo publicar',
     failedBody: 'No se cambió nada en su sitio. Intente de nuevo en unos minutos.',
+    otherSiteBody: 'No se cambió nada en su sitio: el borrador toca carpetas de otro sitio de este hosting (un subdominio). Pídale al asistente que las quite del borrador.',
     notOwnerTitle: 'No se pudo verificar',
     notOwnerBody: 'La cuenta con la que inició sesión no administra este sitio.',
   },
@@ -121,6 +125,7 @@ const T = {
     conflictBody: 'Some files changed on the site in the meantime, so nothing was published. Ask your assistant to redo the change.',
     failedTitle: "Couldn't publish",
     failedBody: 'Nothing changed on your site. Please try again in a few minutes.',
+    otherSiteBody: 'Nothing changed on your site: the draft touches folders that belong to another site in this hosting account (a subdomain). Ask the assistant to remove them from the draft.',
     notOwnerTitle: "Couldn't verify",
     notOwnerBody: "The account you signed in with doesn't manage this site.",
   },
@@ -251,9 +256,18 @@ export class ApprovalService {
     }
     if (decision !== 'approve') return void res.status(400).end();
 
+    let blocked = site.protectedDirs;
+    if (this.d.layout) {
+      try {
+        blocked = (await this.d.layout.fresh(site, true)).protectedDirs;
+      } catch (e) {
+        if (!(e instanceof LayoutUnavailable)) throw e;
+        return this.message(res, lang, 503, t.failedTitle, t.failedBody);
+      }
+    }
     const fs = await this.d.openFs(site.id);
     try {
-      const rel = await this.d.core.publish(a.draft_id, site.id, fs, a.client_id, a.draft_version);
+      const rel = await this.d.core.publish(a.draft_id, site.id, fs, a.client_id, a.draft_version, blocked);
       await this.d.pool.query(`UPDATE approvals SET status = 'approved', release_number = $2, decided_at = now() WHERE id = $1`, [a.id, rel.number]);
       await this.d.audit.add(site.id, a.client_id, 'publish', { release: rel.number, files: rel.files.map((f) => f.path), approved_in_browser: true, approval_id: a.id });
       return void res.redirect(303, `/approve/${a.id}`);
@@ -261,6 +275,7 @@ export class ApprovalService {
       if (!(e instanceof DeployError)) throw e;
       if (e.code === 'not_previewed' || e.code === 'not_found' || e.code === 'expired') return this.message(res, lang, 409, t.expiredTitle, t.changedBody);
       if (e.code === 'conflict') return this.message(res, lang, 409, t.failedTitle, t.conflictBody);
+      if (e.code === 'other_site') return this.message(res, lang, 409, t.failedTitle, t.otherSiteBody);
       console.error('approved publish failed', e.code, e.message);
       return this.message(res, lang, 502, t.failedTitle, t.failedBody);
     } finally {

@@ -23,15 +23,26 @@ export class PgClientsStore implements OAuthRegisteredClientsStore {
     private readonly cimdHostSuffixes: string[] = CIMD_HOST_SUFFIXES,
   ) {}
 
-  private assertRedirects(uris: unknown): asserts uris is string[] {
+  /**
+   * The client's redirect URIs that we accept. Some clients register several at once (Cursor:
+   * cursor://…, an https web callback and http://localhost:8787/callback; VS Code: vscode.dev URLs and
+   * http://127.0.0.1:33418/) and then use only one. Keep the allowed ones instead of refusing the
+   * whole registration; refuse only when none is allowed. The client gets back the filtered list
+   * (RFC 7591 lets the server change metadata), and authorize still requires an exact match.
+   */
+  private allowedRedirects(uris: unknown): string[] {
     if (!Array.isArray(uris) || uris.length === 0) throw new InvalidClientMetadataError('redirect_uris is required');
+    const allowed: string[] = [];
     for (const u of uris) {
-      if (typeof u !== 'string' || !(this.redirectAllowlist.includes(u) || isLoopbackRedirect(u))) {
+      if (typeof u === 'string' && (this.redirectAllowlist.includes(u) || isLoopbackRedirect(u))) {
+        if (!allowed.includes(u)) allowed.push(u);
+      } else {
         // Logged so a new AI host callback can be added to EXTRA_REDIRECT_URIS (a URL, not a secret).
         console.warn(JSON.stringify({ t: new Date().toISOString(), event: 'redirect_uri_refused', redirect_uri: String(u).slice(0, 300) }));
-        throw new InvalidClientMetadataError(`redirect_uri not allowed: ${String(u)}`);
       }
     }
+    if (!allowed.length) throw new InvalidClientMetadataError(`redirect_uri not allowed: ${uris.map(String).join(', ').slice(0, 300)}`);
+    return allowed;
   }
 
   async getClient(clientId: string): Promise<OAuthClientInformationFull | undefined> {
@@ -45,9 +56,10 @@ export class PgClientsStore implements OAuthRegisteredClientsStore {
   }
 
   async registerClient(client: Omit<OAuthClientInformationFull, 'client_id' | 'client_id_issued_at'>): Promise<OAuthClientInformationFull> {
-    this.assertRedirects(client.redirect_uris);
+    const redirectUris = this.allowedRedirects(client.redirect_uris);
     const full: OAuthClientInformationFull = {
       ...client,
+      redirect_uris: redirectUris,
       client_id: `dcr_${randomToken(18)}`,
       client_id_issued_at: Math.floor(Date.now() / 1000),
     };
@@ -85,10 +97,9 @@ export class PgClientsStore implements OAuthRegisteredClientsStore {
     if (text.length > CIMD_MAX_BYTES) return undefined;
     const doc = JSON.parse(text) as Record<string, unknown>;
     if (doc.client_id !== clientId) return undefined;
-    this.assertRedirects(doc.redirect_uris);
     const info: OAuthClientInformationFull = {
       client_id: clientId,
-      redirect_uris: doc.redirect_uris,
+      redirect_uris: this.allowedRedirects(doc.redirect_uris),
       client_name: typeof doc.client_name === 'string' ? doc.client_name.slice(0, 100) : undefined,
       client_uri: typeof doc.client_uri === 'string' ? doc.client_uri : undefined,
       token_endpoint_auth_method: 'none',

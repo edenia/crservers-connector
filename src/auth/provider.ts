@@ -59,8 +59,10 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, now() + make_interval(secs => $9))`,
       [rid, client.client_id, params.redirectUri, params.codeChallenge, params.state ?? null, params.scopes ?? [], this.d.mcpUrl, hashToken(binding), REQUEST_TTL_S],
     );
-    // The consent screen names where the code goes; for a loopback callback that's the user's own computer.
-    const appHost = isLoopbackRedirect(params.redirectUri) ? 'localhost' : new URL(params.redirectUri).host;
+    // The consent screen names where the code goes; for a loopback or app callback (warp://…)
+    // that's an app on the user's own computer.
+    const redirect = new URL(params.redirectUri);
+    const appHost = isLoopbackRedirect(params.redirectUri) || !/^https?:$/.test(redirect.protocol) ? 'localhost' : redirect.host;
     const req = signReq(this.d.reqKey, {
       rid,
       app_name: client.client_name?.slice(0, 60) || appHost,

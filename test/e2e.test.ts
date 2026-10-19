@@ -231,6 +231,29 @@ describe('registration with several callbacks (Cursor, VS Code)', () => {
     }
   });
 
+  it('accepts Warp\'s app callback (exact match only) and names it as an app on this computer', async () => {
+    const reg = await fetch(`${base}/register`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ redirect_uris: ['warp://mcp/oauth2callback'], client_name: 'Warp', token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'] }),
+    });
+    expect(reg.status).toBe(201);
+    const { client_id } = (await reg.json()) as { client_id: string };
+    const { challenge } = pkce();
+    const q = new URLSearchParams({
+      response_type: 'code', client_id, redirect_uri: 'warp://mcp/oauth2callback', code_challenge: challenge,
+      code_challenge_method: 'S256', state: 's', scope: 'site', resource: `${base}/mcp`,
+    });
+    const res = await get(`/authorize?${q}`);
+    expect(res.status).toBe(302);
+    const req = verifyReq(reqKey, new URL(res.headers.get('location')!).searchParams.get('req')!)!;
+    expect(req).toMatchObject({ app_name: 'Warp', app_host: 'localhost' });
+    for (const bad of ['warp://evil/oauth2callback', 'warp://mcp/other', 'myapp://mcp/oauth2callback']) {
+      const r = await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: [bad] }) });
+      expect(r.status, bad).toBe(400);
+    }
+  });
+
   it('still refuses a registration where no callback is allowed', async () => {
     const res = await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['cursor://x/cb', 'https://evil.example/cb'] }) });
     expect(res.status).toBe(400);

@@ -5,6 +5,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PgClientsStore } from '../src/auth/clients.js';
 import type { ClientAreaApi, ClientAreaGrant, LayoutSite } from '../src/auth/clientarea.js';
+import { DEFAULT_REDIRECT_ALLOWLIST } from '../src/config.js';
 import { LayoutSync } from '../src/auth/layout.js';
 import { ConnectorOAuthProvider } from '../src/auth/provider.js';
 import { verifyReq } from '../src/auth/req.js';
@@ -68,7 +69,7 @@ beforeAll(async () => {
   await sites.add({ serviceId: 15, domain: 'uat.example', ftpHost: 'iwx.test', ftpUser: 'crsconnect@uat.example', ftpPassword: 'pw' });
   provider = new ConnectorOAuthProvider({
     pool,
-    clients: new PgClientsStore(pool, [CHATGPT]),
+    clients: new PgClientsStore(pool, DEFAULT_REDIRECT_ALLOWLIST), // the production defaults (includes ChatGPT)
     sites,
     clientArea,
     issuer: base,
@@ -205,7 +206,7 @@ describe('registration', () => {
 describe('registration with several callbacks (Cursor, VS Code)', () => {
   it('keeps the allowed callbacks, drops the rest, and only accepts a kept one at authorize', async () => {
     for (const [name, uris, kept] of [
-      ['Cursor', ['cursor://anysphere.cursor-mcp/oauth/callback', 'https://www.cursor.com/agents/mcp/oauth/callback', 'http://localhost:8787/callback'], ['http://localhost:8787/callback']],
+      ['Cursor', ['cursor://anysphere.cursor-mcp/oauth/callback', 'https://www.cursor.com/agents/mcp/oauth/callback', 'http://localhost:8787/callback'], ['https://www.cursor.com/agents/mcp/oauth/callback', 'http://localhost:8787/callback']],
       ['Visual Studio Code', ['https://vscode.dev/redirect', 'https://insiders.vscode.dev/redirect', 'http://127.0.0.1:33418/'], ['http://127.0.0.1:33418/']],
     ] as const) {
       const reg = await fetch(`${base}/register`, {

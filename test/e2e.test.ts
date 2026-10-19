@@ -254,6 +254,27 @@ describe('registration with several callbacks (Cursor, VS Code)', () => {
     }
   });
 
+  it('accepts the website builder callbacks on the allowlist (issue #51)', async () => {
+    for (const [name, uri] of [
+      ['Make', 'https://www.make.com/oauth/cb/mcp'],
+      ['Lovable', 'https://lovable.dev/oauth/callback'],
+      ['Perplexity', 'https://www.perplexity.ai/rest/connections/oauth_callback'],
+      ['n8n', 'https://oauth.n8n.cloud/oauth2/callback'],
+    ] as const) {
+      const reg = await fetch(`${base}/register`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ redirect_uris: [uri], client_name: name, token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'] }),
+      });
+      expect(reg.status, name).toBe(201);
+    }
+    // Lookalike hosts and paths stay refused.
+    for (const bad of ['https://lovable.dev.evil.example/oauth/callback', 'https://make.com/oauth/cb/mcp', 'https://www.make.com/oauth/cb/other']) {
+      const r = await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: [bad] }) });
+      expect(r.status, bad).toBe(400);
+    }
+  });
+
   it('still refuses a registration where no callback is allowed', async () => {
     const res = await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['cursor://x/cb', 'https://evil.example/cb'] }) });
     expect(res.status).toBe(400);

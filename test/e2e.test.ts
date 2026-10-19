@@ -202,6 +202,40 @@ describe('registration', () => {
   });
 });
 
+describe('registration with several callbacks (Cursor, VS Code)', () => {
+  it('keeps the allowed callbacks, drops the rest, and only accepts a kept one at authorize', async () => {
+    for (const [name, uris, kept] of [
+      ['Cursor', ['cursor://anysphere.cursor-mcp/oauth/callback', 'https://www.cursor.com/agents/mcp/oauth/callback', 'http://localhost:8787/callback'], ['http://localhost:8787/callback']],
+      ['Visual Studio Code', ['https://vscode.dev/redirect', 'https://insiders.vscode.dev/redirect', 'http://127.0.0.1:33418/'], ['http://127.0.0.1:33418/']],
+    ] as const) {
+      const reg = await fetch(`${base}/register`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ redirect_uris: uris, client_name: name, token_endpoint_auth_method: 'none', grant_types: ['authorization_code', 'refresh_token'] }),
+      });
+      expect(reg.status, name).toBe(201);
+      const body = (await reg.json()) as { client_id: string; redirect_uris: string[] };
+      expect(body.redirect_uris, name).toEqual(kept);
+
+      const { challenge } = pkce();
+      const q = (redirect: string) => new URLSearchParams({
+        response_type: 'code', client_id: body.client_id, redirect_uri: redirect, code_challenge: challenge,
+        code_challenge_method: 'S256', state: 's', scope: 'site', resource: `${base}/mcp`,
+      });
+      const ok = await get(`/authorize?${q(kept[0]!)}`);
+      expect(ok.status, name).toBe(302);
+      expect(new URL(ok.headers.get('location')!).searchParams.get('req'), name).toBeTruthy();
+      const dropped = await get(`/authorize?${q(uris[0]!)}`);
+      expect(dropped.status, `${name} dropped callback`).toBe(400);
+    }
+  });
+
+  it('still refuses a registration where no callback is allowed', async () => {
+    const res = await fetch(`${base}/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ redirect_uris: ['cursor://x/cb', 'https://evil.example/cb'] }) });
+    expect(res.status).toBe(400);
+  });
+});
+
 describe('authorization code flow', () => {
   it('signs a req the client-area extension can verify, naming the asking app', async () => {
     const { payload } = await startAuthorize(await register());

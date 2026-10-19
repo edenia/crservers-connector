@@ -7,6 +7,9 @@ export const DEFAULT_REDIRECT_ALLOWLIST = [
   'https://chatgpt.com/connector_platform_oauth_redirect',
   // Cursor (desktop agents sign in through its web callback; https://cursor.com/docs/context/mcp).
   'https://www.cursor.com/agents/mcp/oauth/callback',
+  // Warp (desktop app) registers only this app callback. Exact match only: custom schemes in
+  // general stay refused. PKCE keeps a code delivered to another app on the device useless.
+  'warp://mcp/oauth2callback',
 ];
 
 const b64urlKey = z

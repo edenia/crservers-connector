@@ -1,7 +1,6 @@
 /**
  * Server-to-server calls to the client-area extension that handles sign-in and consent:
  *   POST {CLIENT_AREA_URL}/admin/api.php  call=module&module=crsconnect&fn=exchange&code&rid
- *   POST {CLIENT_AREA_URL}/admin/api.php  call=module&module=crsconnect&fn=layout&service_id  (client area 0.7+)
  * The API key should be limited to the `module` method and IP-locked to our egress.
  */
 export interface ClientAreaGrant {
@@ -47,35 +46,8 @@ export function parseSites(raw: unknown): ClientAreaSite[] {
   });
 }
 
-/** One site of a hosting service as the client area sees it now (layout refresh). */
-export interface LayoutSite {
-  domain: string;
-  kind: 'main' | 'secondary' | 'subdomain';
-  protected_dirs: string[];
-}
-
-/** A hosting service can have many domains; more than this is treated as a malformed answer. */
-export const MAX_SITES_PER_SERVICE = 200;
-
-/** Validates the client area's layout answer; throws on anything unexpected. */
-export function parseLayout(raw: unknown): LayoutSite[] {
-  if (!Array.isArray(raw) || raw.length < 1 || raw.length > MAX_SITES_PER_SERVICE) throw new Error('Unexpected client area layout');
-  return raw.map((x) => {
-    const e = (x ?? {}) as Record<string, unknown>;
-    const domain = String(e.domain ?? '').toLowerCase();
-    const kind = e.kind === 'main' || e.kind === 'secondary' || e.kind === 'subdomain' ? e.kind : undefined;
-    const dirs = Array.isArray(e.protected_dirs) ? e.protected_dirs.map(String) : null;
-    if (!DOMAIN_RE.test(domain) || !kind || !dirs || dirs.length > 100 || dirs.some((d) => !DIR_RE.test(d) || d.split('/').some((p) => p === '.' || p === '..'))) {
-      throw new Error('Unexpected client area layout entry');
-    }
-    return { domain, kind, protected_dirs: dirs };
-  });
-}
-
 export interface ClientAreaApi {
   exchange(code: string, rid: string): Promise<ClientAreaGrant | null>;
-  /** The service's current sites and their protected folders. Throws when the client area can't answer. */
-  layout?(serviceId: number): Promise<LayoutSite[]>;
 }
 
 export class ClientAreaClient implements ClientAreaApi {
@@ -112,23 +84,5 @@ export class ClientAreaClient implements ClientAreaApi {
       ...(typeof j.site_setup === 'string' && j.site_setup ? { site_setup: j.site_setup } : {}),
       ...(j.sites !== undefined ? { sites: parseSites(j.sites) } : {}),
     };
-  }
-
-  async layout(serviceId: number): Promise<LayoutSite[]> {
-    const body = new URLSearchParams({ api_id: this.apiId, api_key: this.apiKey, call: 'module', module: 'crsconnect', fn: 'layout', service_id: String(serviceId) });
-    const res = await this.fetchImpl(`${this.baseUrl}/admin/api.php`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/x-www-form-urlencoded' },
-      body,
-      signal: AbortSignal.timeout(15_000),
-    });
-    if (!res.ok) throw new Error(`Client area API HTTP ${res.status}`);
-    const j = (await res.json()) as Record<string, unknown>;
-    if (j.success !== true) {
-      const reason = [j.error, (j as { errors?: unknown }).errors].flat().filter(Boolean).map(String).join('; ').slice(0, 300);
-      throw new Error(`Client area layout refused: ${reason || 'no reason given'}`);
-    }
-    if (j.service_id !== serviceId) throw new Error('Unexpected client area layout response');
-    return parseLayout(j.sites);
   }
 }

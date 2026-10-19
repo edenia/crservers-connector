@@ -247,12 +247,6 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       ALTER TABLE grants ALTER COLUMN site_id DROP NOT NULL;
     `,
   },
-  {
-    // When the site's layout (kind, protected_dirs) was last confirmed by the client area. Publishing
-    // re-checks it when older than a few minutes, so a subdomain created after connecting is protected.
-    id: '009_layout_checked_at',
-    sql: `ALTER TABLE sites ADD COLUMN layout_checked_at timestamptz;`,
-  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

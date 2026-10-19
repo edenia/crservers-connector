@@ -4,9 +4,8 @@ import type { AddressInfo } from 'node:net';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PgClientsStore } from '../src/auth/clients.js';
-import type { ClientAreaApi, ClientAreaGrant, LayoutSite } from '../src/auth/clientarea.js';
+import type { ClientAreaApi, ClientAreaGrant } from '../src/auth/clientarea.js';
 import { DEFAULT_REDIRECT_ALLOWLIST } from '../src/config.js';
-import { LayoutSync } from '../src/auth/layout.js';
 import { ConnectorOAuthProvider } from '../src/auth/provider.js';
 import { verifyReq } from '../src/auth/req.js';
 import { migrate } from '../src/db/migrate.js';
@@ -42,16 +41,7 @@ siteFs.close = async () => undefined;
 const caResults = new Map<string, ClientAreaGrant | null>();
 const liveFetches: string[] = [];
 let sitesRepo: SiteRepo;
-/** The client area's current layout per hosting service; unset = what the connector already stores. */
-const layouts = new Map<number, LayoutSite[] | 'down'>();
-const clientArea: ClientAreaApi = {
-  exchange: async (code) => caResults.get(code) ?? null,
-  layout: async (serviceId) => {
-    const l = layouts.get(serviceId);
-    if (l === 'down') throw new Error('client area down');
-    return l ?? (await sitesRepo.byService(serviceId)).map((s) => ({ domain: s.domain, kind: s.kind, protected_dirs: s.protectedDirs }));
-  },
-};
+const clientArea: ClientAreaApi = { exchange: async (code) => caResults.get(code) ?? null };
 
 beforeAll(async () => {
   const admin = new pg.Pool({ connectionString: DB });
@@ -93,14 +83,12 @@ beforeAll(async () => {
   const preview = new PreviewService(pool, sites, base, fetchLive);
   const audit = new AuditLog(pool);
   const appName = (id: string) => clientsForNames.displayName(id);
-  // maxAge 0: every call asks the (fake) client area, so layout changes show up immediately.
-  const layout = new LayoutSync(sites, clientArea, 0);
-  const approvals = new ApprovalService({ pool, sites, core, audit, openFs: async () => siteFs, preview, clientArea, clientAreaUrl: CA_URL, reqKey, publicUrl: base, appName, layout });
+  const approvals = new ApprovalService({ pool, sites, core, audit, openFs: async () => siteFs, preview, clientArea, clientAreaUrl: CA_URL, reqKey, publicUrl: base, appName });
   const fetchUrl = async (url: string) => {
     if (url.endsWith('/foto.png')) return { data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]), contentType: 'image/png', finalUrl: url };
     return { data: Buffer.from('<!doctype html><p>login</p>'), contentType: 'text/html', finalUrl: url };
   };
-  const mcp = { core, sites, preview, approvals, audit, openFs: async () => siteFs, appName, fetchUrl, layout };
+  const mcp = { core, sites, preview, approvals, audit, openFs: async () => siteFs, appName, fetchUrl };
   sitesRepo = sites;
   const clientApi = { pool, sites, audit, appName, reqKey, removeSite: (grantId: string, siteId: string) => provider.removeSite(grantId, siteId) };
   server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals, clientApi, openaiAppsChallenge: 'test-challenge-token', events: { pool, sites, reqKey }, registrationRateLimit: false }));
@@ -996,43 +984,6 @@ describe('several sites per hosting service and per connection', () => {
       expect(r.text, tool).toContain('dev/');
     }
     expect((await call(c, 'write_files', { changeset_id: d.changeset_id, files: [{ path: 'developers.html', content: 'ok' }] })).isError).toBe(false);
-    await c.close();
-  });
-
-  it('a subdomain created after connecting is protected without reconnecting', async () => {
-    const c = await mcpClient(token);
-    // Drafted while "shop" was still an ordinary folder of selva.example.
-    const { data: d } = await call(c, 'start_changeset', { site: 'selva.example' });
-    expect((await call(c, 'write_files', { changeset_id: d.changeset_id, files: [{ path: 'shop/index.html', content: 'tienda' }] })).isError).toBe(false);
-    expect((await call(c, 'preview_changeset', { changeset_id: d.changeset_id })).isError).toBe(false);
-
-    // The client then creates shop.selva.example in the panel: its folder is inside selva.example.
-    layouts.set(88, [
-      { domain: 'selva.example', kind: 'main', protected_dirs: ['dev', 'shop'] },
-      { domain: 'carrot.example', kind: 'secondary', protected_dirs: [] },
-      { domain: 'dev.selva.example', kind: 'subdomain', protected_dirs: [] },
-      { domain: 'shop.selva.example', kind: 'subdomain', protected_dirs: [] },
-    ]);
-    const pub = await call(c, 'publish', { changeset_id: d.changeset_id });
-    expect(pub.isError).toBe(true);
-    expect(pub.text).toContain('shop/');
-    expect(siteFs.files.has('shop/index.html')).toBe(false);
-    expect((await sitesRepo.byAccount(88))!.protectedDirs).toEqual(['dev', 'shop']);
-    expect((await call(c, 'get_site_info', { site: 'selva.example' })).data.other_site_folders).toEqual(['dev', 'shop']);
-
-    // New drafts can't touch it either.
-    const { data: d2 } = await call(c, 'start_changeset', { site: 'selva.example' });
-    expect((await call(c, 'write_files', { changeset_id: d2.changeset_id, files: [{ path: 'shop/x.html', content: 'x' }] })).isError).toBe(true);
-
-    // If the client area can't confirm the layout, nothing is published; drafting still works.
-    layouts.set(88, 'down');
-    expect((await call(c, 'write_files', { changeset_id: d2.changeset_id, files: [{ path: 'nosotros.html', content: 'ok' }] })).isError).toBe(false);
-    expect((await call(c, 'preview_changeset', { changeset_id: d2.changeset_id })).isError).toBe(false);
-    const down = await call(c, 'publish', { changeset_id: d2.changeset_id });
-    expect(down.isError).toBe(true);
-    expect(down.text).toContain('Could not confirm the hosting layout');
-    expect(siteFs.files.has('nosotros.html')).toBe(false);
-    layouts.delete(88);
     await c.close();
   });
 

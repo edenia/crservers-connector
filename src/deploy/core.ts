@@ -18,8 +18,7 @@ export type DeployErrorCode =
   | 'conflict'
   | 'drift'
   | 'not_revertible'
-  | 'publish_failed'
-  | 'other_site';
+  | 'publish_failed';
 
 export class DeployError extends Error {
   constructor(
@@ -282,17 +281,13 @@ export class DeployCore {
     return { added: added.sort(), modified: modified.sort(), deleted: [...d.deletes].sort(), conflicts };
   }
 
-  /**
-   * `expectedVersion`: refuse unless the draft is still exactly that version (approval link).
-   * `blocked`: folders that belong to other sites (subdomains); the publish is refused if it touches them.
-   */
-  async publish(draftId: string, siteId: string, fs: SiteFs, byApp: string, expectedVersion?: number, blocked: string[] = []): Promise<Release> {
+  /** `expectedVersion`: refuse unless the draft is still exactly that version (approval link). */
+  async publish(draftId: string, siteId: string, fs: SiteFs, byApp: string, expectedVersion?: number): Promise<Release> {
     return this.withSiteLock(siteId, async () => {
       const d = await this.getDraft(draftId, siteId);
       if (expectedVersion !== undefined && d.version !== expectedVersion) throw new DeployError('not_previewed', 'The draft changed after approval was requested');
       if (d.writes.size === 0 && d.deletes.size === 0) throw new DeployError('invalid', 'Nothing to publish');
       if (d.previewedVersion !== d.version) throw new DeployError('not_previewed', 'Preview the draft in its current form before publishing');
-      refuseBlocked([...d.writes.keys(), ...d.deletes], blocked);
       const { conflicts, live } = await this.conflicts(d, fs);
       if (conflicts.length) throw new DeployError('conflict', 'The live site changed since the draft read these files', conflicts);
       const release = await this.commit(siteId, fs, d.writes, d.deletes, live, 'publish', byApp);
@@ -305,11 +300,8 @@ export class DeployCore {
     return this.releases.list(siteId);
   }
 
-  /**
-   * Restores the files as they were before release `number`, undoing it and every later release.
-   * `blocked`: folders that belong to other sites (subdomains); the revert is refused if it touches them.
-   */
-  async revert(siteId: string, fs: SiteFs, number: number, byApp: string, blocked: string[] = []): Promise<Release> {
+  /** Restores the files as they were before release `number`, undoing it and every later release. */
+  async revert(siteId: string, fs: SiteFs, number: number, byApp: string): Promise<Release> {
     return this.withSiteLock(siteId, async () => {
       const rels = await this.releases.list(siteId);
       const idx = rels.findIndex((r) => r.number === number);
@@ -320,7 +312,6 @@ export class DeployCore {
       for (const r of affected) for (const f of r.files) if (!expected.has(f.path)) expected.set(f.path, f.afterHash);
       const target = new Map<string, ReleaseFile>(); // state before the target release
       for (const r of [...affected].reverse()) for (const f of r.files) if (!target.has(f.path)) target.set(f.path, f);
-      refuseBlocked([...target.keys()], blocked);
 
       const live = new Map<string, Buffer | null>();
       const drift: string[] = [];
@@ -440,11 +431,4 @@ export class DeployCore {
     this.siteLocks.set(siteId, run.catch(() => undefined));
     return run;
   }
-}
-
-/** Throws `other_site` when any path is inside one of the blocked folders (another site's files). */
-function refuseBlocked(paths: string[], blocked: string[]): void {
-  if (!blocked.length) return;
-  const hit = paths.filter((p) => blocked.some((d) => p === d || p.startsWith(`${d}/`))).sort();
-  if (hit.length) throw new DeployError('other_site', 'These files are in folders that belong to another site (a subdomain)', hit);
 }

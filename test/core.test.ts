@@ -202,27 +202,3 @@ describe('revert', () => {
     await expect(core.revert(SITE, fs, 2, 't')).rejects.toBeInstanceOf(DeployError);
   });
 });
-
-describe('folders of other sites (subdomains created after connecting)', () => {
-  it('publish refuses a draft touching a blocked folder; nothing live changes', async () => {
-    const d = await core.startDraft(SITE, fs);
-    await core.writeFiles(d.id, SITE, fs, [{ path: 'api/index.html', content: b('x') }, { path: 'index.html', content: b('<h1>v2</h1>') }]);
-    await core.preview(d.id, SITE, fs);
-    const e = await core.publish(d.id, SITE, fs, 'test', undefined, ['api']).catch((x: unknown) => x);
-    expect(e).toBeInstanceOf(DeployError);
-    expect((e as DeployError).code).toBe('other_site');
-    expect((e as DeployError).paths).toEqual(['api/index.html']);
-    expect(fs.text('index.html')).toBe('<h1>v1</h1>');
-    expect(fs.files.has('api/index.html')).toBe(false);
-    // A folder name that only starts the same way isn't blocked.
-    expect((await core.publish(d.id, SITE, fs, 'test', undefined, ['ap'])).number).toBe(1);
-  });
-
-  it('revert refuses when the releases it undoes touched a now-blocked folder', async () => {
-    await publishChange((id) => core.writeFiles(id, SITE, fs, [{ path: 'api/x.html', content: b('x') }]));
-    const e = await core.revert(SITE, fs, 1, 'test', ['api']).catch((x: unknown) => x);
-    expect((e as DeployError).code).toBe('other_site');
-    expect(fs.text('api/x.html')).toBe('x');
-    expect((await core.revert(SITE, fs, 1, 'test')).number).toBe(2);
-  });
-});

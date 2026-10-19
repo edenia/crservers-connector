@@ -1,7 +1,6 @@
 import pg from 'pg';
 import { PgClientsStore } from './auth/clients.js';
 import { ClientAreaClient } from './auth/clientarea.js';
-import { LayoutSync } from './auth/layout.js';
 import { ConnectorOAuthProvider } from './auth/provider.js';
 import { loadConfig } from './config.js';
 import { fromB64url } from './crypto.js';
@@ -40,13 +39,12 @@ const preview = new PreviewService(pool, sites, cfg.PUBLIC_URL);
 const audit = new AuditLog(pool);
 const openFs = async (siteId: string) => new FtpSiteFs(await sites.ftpConfig(siteId));
 const appName = (id: string) => clients.displayName(id);
-const layout = new LayoutSync(sites, clientArea);
 const approvals = new ApprovalService({
-  pool, sites, core, audit, openFs, preview, clientArea, appName, layout,
+  pool, sites, core, audit, openFs, preview, clientArea, appName,
   clientAreaUrl: cfg.CLIENT_AREA_URL, reqKey: fromB64url(cfg.REQ_KEY), publicUrl: cfg.PUBLIC_URL,
 });
 const clientApi = { pool, sites, audit, appName, reqKey: fromB64url(cfg.REQ_KEY), removeSite: (grantId: string, siteId: string) => provider.removeSite(grantId, siteId) };
-const mcp = { core, sites, preview, approvals, audit, openFs, appName, layout };
+const mcp = { core, sites, preview, approvals, audit, openFs, appName };
 
 const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp, preview, approvals, clientApi, openaiAppsChallenge: cfg.OPENAI_APPS_CHALLENGE, events: { pool, sites, reqKey: fromB64url(cfg.REQ_KEY) } });
 const server = app.listen(cfg.PORT, () => console.log(`crservers-connector listening on :${cfg.PORT} (${cfg.PUBLIC_URL})`));

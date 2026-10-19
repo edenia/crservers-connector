@@ -10,7 +10,6 @@ import type { AuditLog } from '../deploy/pgstores.js';
 import type { SiteFs } from '../deploy/sitefs.js';
 import type { PreviewService } from '../preview/preview.js';
 import { approvalReasons, type ApprovalService } from '../approvals/approvals.js';
-import { LayoutUnavailable, type LayoutSync } from '../auth/layout.js';
 import type { Site, SiteRepo } from '../sites.js';
 
 /**
@@ -33,8 +32,6 @@ export interface McpDeps {
   approvals?: Pick<ApprovalService, 'request' | 'latest' | 'siteOfDraft'>;
   /** Downloads for import_from_url (public addresses only). Tests inject a fake. */
   fetchUrl?: UrlFetcher;
-  /** Re-checks a site's subdomain folders with the client area (src/auth/layout.ts). */
-  layout?: Pick<LayoutSync, 'fresh'>;
 }
 
 export const INSTRUCTIONS = `CR Servers: publish and maintain websites on CR Servers hosting.
@@ -112,10 +109,7 @@ const ERROR_TEXT: Record<string, string> = {
   publish_failed: 'La publicación falló. / Publish failed.',
   limit: 'Límite alcanzado. / Limit reached.',
   invalid: 'Solicitud no válida. / Invalid request.',
-  other_site: 'Estos archivos están en carpetas de otro sitio de este hosting (un subdominio); quítelos del borrador o use ese sitio. / These files are in folders that belong to another site in this hosting account (a subdomain); remove them from the draft or use that site.',
 };
-
-const LAYOUT_UNAVAILABLE = 'No se pudo confirmar la estructura del hosting; no se cambió nada. Intente de nuevo en unos minutos. / Could not confirm the hosting layout; nothing changed. Try again in a few minutes.';
 
 export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
   const server = new McpServer({ name: 'crservers', title: 'CR Servers', version: '0.1.0' }, { instructions: INSTRUCTIONS });
@@ -140,15 +134,13 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
       site = r.site;
     }
     if (site.status !== 'active') return fail(`La publicación está pausada para ${site.domain}; contacte a soporte. / Publishing is paused for ${site.domain}; contact support.`);
-    // Picks up subdomains created since the client connected (falls back to the stored layout).
-    const current = deps.layout ? await deps.layout.fresh(site, false) : site;
+    const current = site;
     const held: { fs?: SiteFs } = {};
     const fs = async () => (held.fs ??= await deps.openFs(current.id));
     try {
       return await fn({ site: current, permission, clientId: auth.clientId }, fs);
     } catch (e) {
       if (e instanceof DeployError) return fail(`${ERROR_TEXT[e.code] ?? e.code} ${e.message}`, e.paths.length ? { paths: e.paths } : {});
-      if (e instanceof LayoutUnavailable) return fail(LAYOUT_UNAVAILABLE);
       if (e instanceof PathError) return fail(`${e.message}: ${e.path}`);
       if (e instanceof ImportError) return fail(`No se pudo traer el archivo: ${e.message} / Could not import the file: ${e.message}`);
       console.error('tool error', e);
@@ -465,8 +457,6 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     (a) =>
       run({ changesetId: a.changeset_id }, async ({ site, permission, clientId }, fs) => {
         if (permission !== 'publish') return fail('Esta conexión solo permite vista previa. / This connection is preview-only.');
-        // Before anything goes live: the layout must be current (a subdomain may have been created since).
-        const fresh = deps.layout ? await deps.layout.fresh(site, true) : site;
         if (deps.approvals) {
           const prev = await deps.approvals.latest(a.changeset_id, site.id);
           if (prev?.status === 'approved') {
@@ -478,8 +468,6 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
           }
           const s = await deps.core.summary(a.changeset_id, site.id);
           if (!s.previewed) throw new DeployError('not_previewed', 'Preview the draft in its current form before publishing');
-          const blocked = refuseOtherSites(fresh, [...s.added, ...s.modified, ...s.deleted]);
-          if (blocked) return blocked;
           const reasons = approvalReasons(s, site);
           if (reasons.length) {
             const r = await deps.approvals.request({
@@ -497,7 +485,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
           }
         }
         const f = await fs();
-        const rel = await deps.core.publish(a.changeset_id, site.id, f, clientId, undefined, fresh.protectedDirs);
+        const rel = await deps.core.publish(a.changeset_id, site.id, f, clientId);
         await deps.audit.add(site.id, clientId, 'publish', { release: rel.number, files: rel.files.map((x) => x.path) });
         const marker = await readDeployMarker(f);
         return ok(`Publicado como versión #${rel.number}. Para deshacer: "revierta la versión #${rel.number}". / Published as release #${rel.number}.${marker ? `\n\n${deployNote(marker)}` : ''}`, {
@@ -529,8 +517,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     (a) =>
       run({ site: a.site }, async ({ site, permission, clientId }, fs) => {
         if (permission !== 'publish') return fail('Esta conexión solo permite vista previa. / This connection is preview-only.');
-        const fresh = deps.layout ? await deps.layout.fresh(site, true) : site;
-        const rel = await deps.core.revert(site.id, await fs(), a.release, clientId, fresh.protectedDirs);
+        const rel = await deps.core.revert(site.id, await fs(), a.release, clientId);
         await deps.audit.add(site.id, clientId, 'revert', { to_before: a.release, release: rel.number });
         return ok(`Restaurado a como estaba antes de la versión #${a.release} (nueva versión #${rel.number}). / Restored to before release #${a.release}.`, {
           release: rel.number,

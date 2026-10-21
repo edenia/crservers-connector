@@ -54,6 +54,37 @@ describe('drafts and reads', () => {
     expect(paths).toEqual(['assets', 'index.html', 'new']);
   });
 
+  it('reports a missing folder as not found, also when the FTP listing is refused', async () => {
+    await expect(core.listFiles(SITE, fs, 'prueba-fotos43')).rejects.toMatchObject({ code: 'not_found' });
+    await expect(core.listFiles(SITE, fs, 'assets/nope/deeper')).rejects.toMatchObject({ code: 'not_found' });
+    // FTP answers 450 for a missing folder instead of an empty list.
+    const refusing = Object.assign(Object.create(fs), {
+      list: async (dir: string) => {
+        if (dir && !fs.files.has(`${dir}/`) && ![...fs.files.keys()].some((p) => p.startsWith(`${dir}/`))) throw new Error(`450 /${dir}: No such file or directory`);
+        return fs.list(dir);
+      },
+    }) as MemorySiteFs;
+    await expect(core.listFiles(SITE, refusing, 'prueba-fotos43')).rejects.toMatchObject({ code: 'not_found' });
+    expect((await core.listFiles(SITE, refusing, 'assets')).map((e) => e.path)).toEqual(['assets/a.css']);
+  });
+
+  it('lists a folder that only exists in the draft', async () => {
+    const d = await core.startDraft(SITE, fs);
+    await core.writeFiles(d.id, SITE, fs, [{ path: 'new/page.html', content: b('n') }]);
+    expect((await core.listFiles(SITE, fs, 'new', d.id)).map((e) => e.path)).toEqual(['new/page.html']);
+    await expect(core.listFiles(SITE, fs, 'new')).rejects.toMatchObject({ code: 'not_found' });
+  });
+
+  it('still surfaces other listing failures', async () => {
+    const broken = Object.assign(Object.create(fs), {
+      list: async () => {
+        throw new Error('connection reset');
+      },
+    }) as MemorySiteFs;
+    await expect(core.listFiles(SITE, broken, '')).rejects.toThrow('connection reset');
+    await expect(core.listFiles(SITE, broken, 'assets')).rejects.toThrow('connection reset');
+  });
+
   it('read_file returns metadata only for binary files', async () => {
     fs.put('assets/img.jpg', Buffer.alloc(10, 1));
     const r = await core.readFile(SITE, fs, 'assets/img.jpg');

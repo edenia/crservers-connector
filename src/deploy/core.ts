@@ -230,7 +230,8 @@ export class DeployCore {
 
   async listFiles(siteId: string, fs: SiteFs, rawDir?: string, draftId?: string): Promise<SiteEntry[]> {
     const dir = normalizeSiteDir(rawDir);
-    const entries = new Map((await fs.list(dir)).map((e) => [e.path, e]));
+    const live = await this.listLiveDir(fs, dir);
+    const entries = new Map((live ?? []).map((e) => [e.path, e]));
     if (draftId) {
       const d = await this.getDraft(draftId, siteId);
       for (const p of d.deletes) entries.delete(p);
@@ -243,7 +244,36 @@ export class DeployCore {
         }
       }
     }
+    // A folder that exists neither live nor in the draft: say so instead of an internal error,
+    // so the assistant corrects the path rather than retrying it.
+    if (!live && !entries.size) throw new DeployError('not_found', 'Folder not found');
     return [...entries.values()].sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /** Live entries of a folder, or null when the folder doesn't exist (FTP refuses the listing). */
+  private async listLiveDir(fs: SiteFs, dir: string): Promise<SiteEntry[] | null> {
+    let list: SiteEntry[];
+    try {
+      list = await fs.list(dir);
+    } catch (e) {
+      if (dir && !(await this.dirExists(fs, dir))) return null;
+      throw e;
+    }
+    if (!list.length && dir && !(await this.dirExists(fs, dir))) return null;
+    return list;
+  }
+
+  /** Decided from the nearest ancestor that lists; a failure that isn't a missing folder propagates. */
+  private async dirExists(fs: SiteFs, dir: string): Promise<boolean> {
+    const parent = dirOf(dir);
+    let list: SiteEntry[];
+    try {
+      list = await fs.list(parent);
+    } catch (e) {
+      if (parent && !(await this.dirExists(fs, parent))) return false;
+      throw e;
+    }
+    return list.some((e) => e.path === dir && e.type === 'dir');
   }
 
   // ---------------------------------------------------------------- preview / publish

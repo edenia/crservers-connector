@@ -11,6 +11,8 @@ export const RETENTION = {
   revokedConnectionDays: 90,
   /** Finished or expired approval requests. */
   approvalDays: 90,
+  /** Support records of tool calls and session starts (src/db/support.ts). */
+  supportDays: 30,
 } as const;
 
 export type CleanupCounts = Record<string, number>;
@@ -45,6 +47,8 @@ export async function cleanup(pool: Pool): Promise<CleanupCounts> {
       await run('grants', `DELETE FROM grants WHERE revoked_at < now() - make_interval(days => $1)`, [RETENTION.revokedConnectionDays]);
       // Approvals that were decided or expired long ago.
       await run('approvals', `DELETE FROM approvals WHERE COALESCE(decided_at, expires_at) < now() - make_interval(days => $1)`, [RETENTION.approvalDays]);
+      // Support records.
+      await run('support_events', `DELETE FROM support_events WHERE at < now() - make_interval(days => $1)`, [RETENTION.supportDays]);
       // Activity log.
       await run('audit_log', `DELETE FROM audit_log WHERE at < now() - make_interval(days => $1)`, [RETENTION.activityDays]);
     } finally {

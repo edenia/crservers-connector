@@ -1,3 +1,5 @@
+import { randomBytes } from 'node:crypto';
+import type { SupportLog } from '../db/support.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -33,6 +35,8 @@ export interface McpDeps {
   approvals?: Pick<ApprovalService, 'request' | 'latest' | 'siteOfDraft'>;
   /** Downloads for import_from_url (public addresses only). Tests inject a fake. */
   fetchUrl?: UrlFetcher;
+  /** Support records (src/db/support.ts): ids and outcomes per tool call and session start. */
+  support?: Pick<SupportLog, 'record'>;
   /** Re-checks a site's subdomain folders with the client area (src/auth/layout.ts). */
   layout?: Pick<LayoutSync, 'fresh'>;
 }
@@ -98,6 +102,23 @@ function ok(summary: string, data: Record<string, unknown>): CallToolResult {
   return { content: [{ type: 'text', text: `${summary}\n\n${JSON.stringify(data, null, 2)}` }], structuredContent: data };
 }
 
+/**
+ * Per-request facts for the tool_call log line (support correlation, connector #56): which site the call
+ * worked on, and the reference id shown to the user on failure. Ids only, never content.
+ */
+export interface Trace {
+  siteId?: string;
+  serviceId?: number;
+  ref?: string;
+}
+
+const REF_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O, 1/I/L: easy to read out over the phone
+
+/** Short reference id a customer can quote to support; logged with the call. */
+export function newRef(): string {
+  return Array.from(randomBytes(6), (b) => REF_ALPHABET[b % REF_ALPHABET.length]).join('');
+}
+
 function fail(message: string, data: Record<string, unknown> = {}): CallToolResult {
   return { isError: true, content: [{ type: 'text', text: `${message}${Object.keys(data).length ? `\n\n${JSON.stringify(data, null, 2)}` : ''}` }], structuredContent: { error: message, ...data } };
 }
@@ -117,7 +138,7 @@ const ERROR_TEXT: Record<string, string> = {
 
 const LAYOUT_UNAVAILABLE = 'No se pudo confirmar la estructura del hosting; no se cambió nada. Intente de nuevo en unos minutos. / Could not confirm the hosting layout; nothing changed. Try again in a few minutes.';
 
-export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
+export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {}): McpServer {
   const server = new McpServer({ name: 'crservers', title: 'CR Servers', version: '0.1.0' }, { instructions: INSTRUCTIONS });
   const extra = (auth.extra ?? {}) as { siteIds?: string[]; permission?: 'preview' | 'publish' };
 
@@ -142,17 +163,21 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
     if (site.status !== 'active') return fail(`La publicación está pausada para ${site.domain}; contacte a soporte. / Publishing is paused for ${site.domain}; contact support.`);
     // Picks up subdomains created since the client connected (falls back to the stored layout).
     const current = deps.layout ? await deps.layout.fresh(site, false) : site;
+    trace.siteId = current.id;
+    trace.serviceId = current.serviceId;
     const held: { fs?: SiteFs } = {};
     const fs = async () => (held.fs ??= await deps.openFs(current.id));
     try {
       return await fn({ site: current, permission, clientId: auth.clientId }, fs);
     } catch (e) {
-      if (e instanceof DeployError) return fail(`${ERROR_TEXT[e.code] ?? e.code} ${e.message}`, e.paths.length ? { paths: e.paths } : {});
-      if (e instanceof LayoutUnavailable) return fail(LAYOUT_UNAVAILABLE);
-      if (e instanceof PathError) return fail(`${e.message}: ${e.path}`);
-      if (e instanceof ImportError) return fail(`No se pudo traer el archivo: ${e.message} / Could not import the file: ${e.message}`);
-      console.error('tool error', e);
-      return fail('Error interno; intente de nuevo. / Internal error; please retry.');
+      const ref = (trace.ref = newRef());
+      const failRef = (message: string, data?: Record<string, unknown>) => fail(`${message} (ref: ${ref})`, data);
+      if (e instanceof DeployError) return failRef(`${ERROR_TEXT[e.code] ?? e.code} ${e.message}`, e.paths.length ? { paths: e.paths } : {});
+      if (e instanceof LayoutUnavailable) return failRef(LAYOUT_UNAVAILABLE);
+      if (e instanceof PathError) return failRef(`${e.message}: ${e.path}`);
+      if (e instanceof ImportError) return failRef(`No se pudo traer el archivo: ${e.message} / Could not import the file: ${e.message}`);
+      console.error(`tool error ref=${ref}`, e);
+      return failRef('Error interno; intente de nuevo. / Internal error; please retry.');
     } finally {
       await held.fs?.close().catch(() => undefined);
     }

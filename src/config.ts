@@ -10,6 +10,16 @@ export const DEFAULT_REDIRECT_ALLOWLIST = [
   // Warp (desktop app) registers only this app callback. Exact match only: custom schemes in
   // general stay refused. PKCE keeps a code delivered to another app on the device useless.
   'warp://mcp/oauth2callback',
+  // Website builders and automation (issue #51). Hosted callbacks: the vendor's servers hold the
+  // token, as with Claude and ChatGPT.
+  // VERIFIED by the vendor: Make.com MCP Client (https://apps.make.com/c5ZhYquO55e90hoCJ0rzt.md).
+  'https://www.make.com/oauth/cb/mcp',
+  // UNVERIFIED (third-party sources), staging only until a real sign-in confirms each one; remove
+  // any that the staging logs show is not what the tool sends before the next production tag.
+  'https://lovable.dev/oauth/callback',
+  'https://www.perplexity.ai/rest/connections/oauth_callback',
+  'https://enterprise.perplexity.ai/rest/connections/oauth_callback',
+  'https://oauth.n8n.cloud/oauth2/callback',
 ];
 
 const b64urlKey = z

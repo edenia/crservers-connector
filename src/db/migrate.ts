@@ -253,6 +253,30 @@ const MIGRATIONS: { id: string; sql: string }[] = [
     id: '009_layout_checked_at',
     sql: `ALTER TABLE sites ADD COLUMN layout_checked_at timestamptz;`,
   },
+  {
+    // Support records (src/db/support.ts): ids and outcomes of tool calls and session starts, kept 30 days.
+    // No foreign keys: a record must outlive nothing and block nothing.
+    id: '010_support_events',
+    sql: `
+      CREATE TABLE support_events (
+        id          bigserial PRIMARY KEY,
+        at          timestamptz NOT NULL DEFAULT now(),
+        kind        text NOT NULL CHECK (kind IN ('tool_call', 'initialize')),
+        ref         text,
+        tool        text,
+        ok          boolean,
+        error       text,
+        site_ids    uuid[] NOT NULL DEFAULT '{}',
+        service_id  integer,
+        client_id   text,
+        app         text,
+        app_version text
+      );
+      CREATE INDEX support_events_ref ON support_events (ref) WHERE ref IS NOT NULL;
+      CREATE INDEX support_events_service_at ON support_events (service_id, at);
+      CREATE INDEX support_events_at ON support_events (at);
+    `,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

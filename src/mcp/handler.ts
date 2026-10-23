@@ -1,7 +1,7 @@
 import type { Request, Response } from 'express';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import { SUPPORTED_PROTOCOL_VERSIONS } from '@modelcontextprotocol/sdk/types.js';
-import { buildMcpServer, type McpDeps } from './tools.js';
+import { buildMcpServer, type McpDeps, type Trace } from './tools.js';
 
 /**
  * Stateless Streamable HTTP: a fresh server + transport per request, so any replica can
@@ -13,8 +13,10 @@ export function mcpHandler(deps: McpDeps) {
       res.status(401).end();
       return;
     }
-    const server = buildMcpServer(deps, req.auth);
-    logToolCalls(req, res);
+    const trace: Trace = {};
+    const server = buildMcpServer(deps, req.auth, trace);
+    logToolCalls(req, res, trace, deps);
+    logInitialize(req, deps);
     logUnsupportedProtocol(req);
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
@@ -34,8 +36,11 @@ export function mcpHandler(deps: McpDeps) {
 /**
  * One log line per tools/call: tool name, duration, and on failure the error message (our own
  * text, or the SDK's input validation error). Never arguments or results: those carry site content.
+ * The log line also carries the random reference id shown to the user on failure (#56); which site,
+ * service and client it belongs to goes only to the support records (src/db/support.ts, 30 days),
+ * so request logs stay free of personal data.
  */
-function logToolCalls(req: Request, res: Response): void {
+function logToolCalls(req: Request, res: Response, trace: Trace, deps: McpDeps): void {
   const msgs = (Array.isArray(req.body) ? req.body : [req.body]) as { method?: string; id?: unknown; params?: { name?: unknown } }[];
   const calls = new Map(msgs.filter((m) => m?.method === 'tools/call').map((m) => [String(m.id), String(m.params?.name ?? '')]));
   if (!calls.size) return;
@@ -68,13 +73,49 @@ function logToolCalls(req: Request, res: Response): void {
       for (const [id, tool] of calls) {
         const r = replies.find((x) => String(x.id) === id);
         const error = r?.error?.message ?? (r?.result?.isError ? String(r.result.content?.[0]?.text ?? '').split('\n')[0] : undefined);
-        console.log(JSON.stringify({ t: new Date().toISOString(), event: 'tool_call', tool, ms: Date.now() - start, ok: Boolean(r) && !error, ...(error ? { error: error.slice(0, 200) } : {}), ...(r ? {} : { note: 'no reply' }) }));
+        console.log(JSON.stringify({
+          t: new Date().toISOString(),
+          event: 'tool_call',
+          tool,
+          ms: Date.now() - start,
+          ok: Boolean(r) && !error,
+          ...(error ? { error: error.slice(0, 200) } : {}),
+          ...(r ? {} : { note: 'no reply' }),
+          ...(trace.ref ? { ref: trace.ref } : {}),
+        }));
+        deps.support?.record({
+          kind: 'tool_call',
+          tool,
+          ok: Boolean(r) && !error,
+          error,
+          ref: trace.ref,
+          siteIds: trace.siteId ? [trace.siteId] : [],
+          serviceId: trace.serviceId,
+          clientId: req.auth?.clientId,
+        });
       }
     } catch {
       // Logging must never break a response.
     }
     return end(chunk, ...rest);
   }) as typeof res.end;
+}
+
+/**
+ * Session start (initialize): the log line says which app connected (its self-reported name and
+ * version); the support record adds the OAuth client and the granted site ids, so support can see
+ * "connected, then nothing arrived" for a customer.
+ */
+function logInitialize(req: Request, deps: McpDeps): void {
+  const msgs = (Array.isArray(req.body) ? req.body : [req.body]) as { method?: string; params?: { clientInfo?: { name?: unknown; version?: unknown } } }[];
+  const init = msgs.find((m) => m?.method === 'initialize');
+  if (!init) return;
+  const info = init.params?.clientInfo ?? {};
+  const extra = (req.auth?.extra ?? {}) as { siteIds?: string[] };
+  const app = String(info.name ?? '').slice(0, 60);
+  const appVersion = String(info.version ?? '').slice(0, 30);
+  console.log(JSON.stringify({ t: new Date().toISOString(), event: 'mcp_initialize', app, app_version: appVersion }));
+  deps.support?.record({ kind: 'initialize', app, appVersion, clientId: req.auth?.clientId, siteIds: (extra.siteIds ?? []).slice(0, 25) });
 }
 
 /**

@@ -12,6 +12,7 @@ import { verifyReq } from '../src/auth/req.js';
 import { migrate } from '../src/db/migrate.js';
 import { DeployCore } from '../src/deploy/core.js';
 import { AuditLog, PgBlobStore, PgDraftStore, PgReleaseStore } from '../src/deploy/pgstores.js';
+import { SupportLog } from '../src/db/support.js';
 import { MemorySiteFs } from '../src/deploy/sitefs.js';
 import { createApp } from '../src/http.js';
 import { PreviewService } from '../src/preview/preview.js';
@@ -100,7 +101,7 @@ beforeAll(async () => {
     if (url.endsWith('/foto.png')) return { data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]), contentType: 'image/png', finalUrl: url };
     return { data: Buffer.from('<!doctype html><p>login</p>'), contentType: 'text/html', finalUrl: url };
   };
-  const mcp = { core, sites, preview, approvals, audit, openFs: async () => siteFs, appName, fetchUrl, layout };
+  const mcp = { core, sites, preview, approvals, audit, openFs: async () => siteFs, appName, fetchUrl, layout, support: new SupportLog(pool) };
   sitesRepo = sites;
   const clientApi = { pool, sites, audit, appName, reqKey, removeSite: (grantId: string, siteId: string) => provider.removeSite(grantId, siteId) };
   server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals, clientApi, openaiAppsChallenge: 'test-challenge-token', events: { pool, sites, reqKey }, registrationRateLimit: false }));
@@ -1158,6 +1159,49 @@ describe('edit_file removals', () => {
     expect(JSON.stringify(lines)).not.toContain('quitar.html');
     await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
     await c.close();
+  });
+});
+
+describe('support correlation (#56)', () => {
+  it('shows a ref in errors; logs carry only the ref, support records carry site/service/client/app', async () => {
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (m: string) => logs.push(m);
+    let failed: Awaited<ReturnType<typeof call>>;
+    const since = new Date();
+    try {
+      const c = await mcpClient(await connect('publish'));
+      failed = await call(c, 'list_files', { path: 'no-existe-56' });
+      await call(c, 'get_site_info');
+      await c.close();
+    } finally {
+      console.log = orig;
+    }
+    const ref = /\(ref: ([A-Z2-9]{6})\)/.exec(failed.text)?.[1];
+    expect(ref).toBeTruthy();
+    expect(failed.text).toContain('Folder not found');
+
+    // Request logs: the ref, the app name, and no ids or paths.
+    const events = logs.filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
+    expect(events.find((e) => e.event === 'mcp_initialize')).toMatchObject({ app: expect.any(String) });
+    const calls = events.filter((e) => e.event === 'tool_call');
+    expect(calls).toEqual([expect.objectContaining({ tool: 'list_files', ok: false, ref }), expect.objectContaining({ tool: 'get_site_info', ok: true })]);
+    const text = JSON.stringify(events);
+    for (const banned of ['no-existe-56', '"site"', '"service"', '"client"', '"sites"']) expect(text).not.toContain(banned);
+
+    // Support records (written in the background): the link to site, service, client and app.
+    type Row = { kind: string; ref: string | null; tool: string | null; ok: boolean | null; site_ids: string[]; service_id: number | null; client_id: string | null; app: string | null };
+    let rows: Row[] = [];
+    for (let i = 0; i < 50 && rows.length < 3; i++) {
+      rows = (await pool.query<Row>('SELECT kind, ref, tool, ok, site_ids, service_id, client_id, app FROM support_events WHERE at >= $1 ORDER BY id', [since])).rows;
+      if (rows.length < 3) await new Promise((r) => setTimeout(r, 20));
+    }
+    const init = rows.find((r) => r.kind === 'initialize');
+    const bad = rows.find((r) => r.ref === ref);
+    expect(init).toMatchObject({ app: expect.any(String), client_id: expect.any(String) });
+    expect(init!.site_ids.length).toBe(1);
+    expect(bad).toMatchObject({ kind: 'tool_call', tool: 'list_files', ok: false, site_ids: init!.site_ids, service_id: expect.any(Number), client_id: init!.client_id });
+    expect(rows.find((r) => r.tool === 'get_site_info')).toMatchObject({ ok: true, ref: null, service_id: bad!.service_id });
   });
 });
 

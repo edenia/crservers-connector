@@ -85,3 +85,22 @@ kubectl -n crservers-connector exec -i deploy/connector -- \
 3. Then restore for real.
 
 **Volume backups** come from the recurring job in `k8s/bootstrap/`. New volumes join it by label.
+
+## Finding a customer's problem (support)
+
+Every tool error shown to the assistant ends with a reference, e.g. `(ref: K7Q2MD)`. Ask the customer for it (or for the hosting service id) and look it up in the support records, kept 30 days:
+
+```sh
+# By reference
+kubectl -n crservers-connector exec connector-postgres-0 -- psql -U connector -d connector -c \
+  "SELECT at, kind, tool, ok, error, service_id, app FROM support_events WHERE ref = 'K7Q2MD'"
+
+# A customer's recent activity by hosting service id (tool calls; session starts have the site ids)
+kubectl -n crservers-connector exec connector-postgres-0 -- psql -U connector -d connector -c \
+  "SELECT at, kind, tool, ok, left(error, 80) AS error, ref, app FROM support_events
+   WHERE service_id = 6020 OR site_ids && (SELECT array_agg(id) FROM sites WHERE service_id = 6020)
+   ORDER BY at DESC LIMIT 50"
+```
+
+The request log has the same ref (`kubectl -n crservers-connector logs deploy/connector | grep K7Q2MD`), next to the stack trace for internal errors. A session start (`initialize`) with no tool calls after it means the app connected and then nothing reached the connector: the problem is on the client side or its network.
+

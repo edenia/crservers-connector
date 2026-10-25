@@ -1238,3 +1238,25 @@ describe('backup files in the web root', () => {
     await c.close();
   });
 });
+
+describe('files that may hold secrets', () => {
+  it('read_file and edit_file never return the content of files that may hold secrets', async () => {
+    siteFs.put('config.php', Buffer.from("<?php $db_pass = 'hunter2';"));
+    try {
+      const c = await mcpClient(await connect('publish'));
+      const read = await call(c, 'read_file', { path: 'config.php' });
+      expect(read.isError).toBe(false);
+      expect(read.data).toMatchObject({ path: 'config.php', secret: true });
+      expect(read.data.text).toBeUndefined();
+      expect(JSON.stringify(read)).not.toContain('hunter2');
+      const { data: draft } = await call(c, 'start_changeset', {});
+      const edit = await call(c, 'edit_file', { changeset_id: draft.changeset_id, path: 'config.php', edits: [{ old_text: 'hunter2', new_text: 'x' }] });
+      expect(edit.isError).toBe(true);
+      expect(JSON.stringify(edit)).not.toContain('hunter2');
+      await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
+      await c.close();
+    } finally {
+      siteFs.files.delete('config.php');
+    }
+  });
+});

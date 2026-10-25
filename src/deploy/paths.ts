@@ -64,6 +64,24 @@ function isComponentPath(path: string): boolean {
   return COMPONENT_PATHS.some((p) => (p.endsWith('/') ? path.startsWith(p) : path === p));
 }
 
+/** Folders whose files are treated as secret (private/, secrets/, credentials/). */
+const SECRET_DIRS = new Set(['private', 'secret', 'secrets', 'credentials']);
+/** Config files that usually hold passwords or keys: wp-config.php, config.php, settings.php, env.php (Magento), credentials.json, … */
+const SECRET_PHP = /^(wp-config(?!-sample\.php$)|config|configuration|settings|local[._-]?settings|database|db|env|credentials?|secrets?|connection|conexion)([._-][^/]*)?\.php$/;
+const SECRET_DATA = /^(credentials?|secrets?|client[_-]?secrets?|service[_-]?account|auth|sftp|ftp[_-]?config|local)([._-][^/]*)?\.(json|xml|txt)$/;
+
+/**
+ * Files that may hold passwords or keys (site config, credentials, anything in a hidden folder):
+ * the AI gets their size and hash, never their content, and can't overwrite them.
+ */
+export function isSecretPath(path: string): boolean {
+  const segments = path.toLowerCase().split('/');
+  const base = segments[segments.length - 1] ?? '';
+  if (segments[0] !== '.well-known' && segments.some((s) => s.startsWith('.'))) return true;
+  if (segments.slice(0, -1).some((s) => SECRET_DIRS.has(s))) return true;
+  return SECRET_PHP.test(base) || SECRET_DATA.test(base);
+}
+
 /**
  * Whether the AI may create, overwrite or delete this path. Throws PathError with a
  * plain reason when not. Assumes `path` is already normalized.
@@ -79,6 +97,7 @@ export function assertWritable(path: string): void {
     throw new PathError('Hidden files and folders (starting with ".") are not allowed', path);
   }
   if (base.toLowerCase() === '.htaccess') throw new PathError('.htaccess is not allowed', path);
+  if (isSecretPath(path)) throw new PathError('This file may hold passwords or keys and can only be changed by the site owner', path);
 
   if (isWellKnown) return;
   const ext = extOf(path);

@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { MB, assertWritable, isTextPath, maxFileBytes, normalizeSiteDir, normalizeSitePath } from './paths.js';
+import { MB, assertWritable, isSecretPath, isTextPath, maxFileBytes, normalizeSiteDir, normalizeSitePath } from './paths.js';
 import { baseOf, dirOf, type SiteEntry, type SiteFs } from './sitefs.js';
 import type { BlobStore, Draft, DraftStore, Release, ReleaseFile, ReleaseStore } from './stores.js';
 
@@ -54,8 +54,10 @@ export interface ReadResult {
   path: string;
   size: number;
   hash: string;
-  /** Present for text files up to 1 MB. */
+  /** Present for text files up to 1 MB, unless the file may hold secrets. */
   text?: string;
+  /** The file may hold passwords or keys (paths.ts isSecretPath): content withheld. */
+  secret?: boolean;
 }
 
 export interface PreviewSummary {
@@ -224,7 +226,8 @@ export class DeployCore {
       data = await fs.read(path);
     }
     const result: ReadResult = { path, size: data.length, hash: sha256(data) };
-    if (isTextPath(path) && data.length <= READ_TEXT_LIMIT) result.text = data.toString('utf8');
+    if (isSecretPath(path)) result.secret = true;
+    else if (isTextPath(path) && data.length <= READ_TEXT_LIMIT) result.text = data.toString('utf8');
     return result;
   }
 

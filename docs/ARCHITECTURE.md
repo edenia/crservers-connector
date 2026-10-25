@@ -142,6 +142,7 @@ When it's on, `publish` doesn't go live. It returns an approval link for the AI 
 
 - **Allowed:** `html htm css js mjs json xml txt md svg png jpg jpeg webp gif avif ico woff woff2 ttf otf mp4 webm mp3 pdf webmanifest`, plus `robots.txt`, `sitemap.xml` and `/.well-known/*`.
 - **Refused:** server-side code (PHP and similar), `.htaccess`, hidden files and folders, and archives inside the site.
+- **Files that may hold secrets** (`src/deploy/paths.ts`, `isSecretPath`): site config such as `wp-config.php`, `config*.php`, `settings*.php`, `configuration.php`, `env.php`, `db.php`; credential files such as `credentials*.json`, `client_secret*.json`, `service-account*.json`, `auth.json`, `local.xml`; anything in a `private/`, `secret(s)/` or `credentials/` folder; anything in a hidden folder (except `/.well-known/`). `read_file` returns their size and hash only (`secret: true`), never the content, and they can't be written or deleted. The rule matches on names, so a secret kept in an ordinary file isn't covered: keep server config outside the web root.
 - **Managed components** (such as a contact form) are installed by CR Servers. Their files are readable by the AI but never writable.
 - **Out of reach entirely:** email, DNS, databases, SSL, billing and the client's other sites.
 

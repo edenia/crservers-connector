@@ -85,6 +85,17 @@ describe('drafts and reads', () => {
     await expect(core.listFiles(SITE, broken, 'assets')).rejects.toThrow('connection reset');
   });
 
+  it('read_file withholds files that may hold secrets, and they cannot be written or deleted', async () => {
+    fs.put('wp-config.php', b("define('DB_PASSWORD', 'hunter2');"));
+    const r = await core.readFile(SITE, fs, 'wp-config.php');
+    expect(r).toEqual({ path: 'wp-config.php', size: 33, hash: sha256(b("define('DB_PASSWORD', 'hunter2');")), secret: true });
+    const d = await core.startDraft(SITE, fs);
+    const [w] = await core.writeFiles(d.id, SITE, fs, [{ path: 'private/options.json', content: b('{}') }]);
+    expect(w).toMatchObject({ ok: false, error: expect.stringContaining('passwords or keys') });
+    const [del] = await core.deleteFiles(d.id, SITE, fs, ['wp-config.php']);
+    expect(del).toMatchObject({ ok: false, error: expect.stringContaining('passwords or keys') });
+  });
+
   it('read_file returns metadata only for binary files', async () => {
     fs.put('assets/img.jpg', Buffer.alloc(10, 1));
     const r = await core.readFile(SITE, fs, 'assets/img.jpg');

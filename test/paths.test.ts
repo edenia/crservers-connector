@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PathError, assertWritable, normalizeSiteDir, normalizeSitePath } from '../src/deploy/paths.js';
+import { PathError, assertWritable, isSecretPath, normalizeSiteDir, normalizeSitePath } from '../src/deploy/paths.js';
 
 describe('normalizeSitePath', () => {
   it.each([
@@ -41,7 +41,53 @@ describe('assertWritable', () => {
     'vendor/autoload.php',
     'vendor/x/readme.md',
     'composer.json',
+    'private/field-options.json',
+    'credentials.json',
+    'app/etc/local.xml',
   ])('blocks %s', (p) => {
     expect(() => assertWritable(p)).toThrow(PathError);
   });
+});
+
+describe('isSecretPath', () => {
+  it.each([
+    'wp-config.php',
+    'blog/wp-config.php',
+    'WP-Config.php',
+    'config.php',
+    'config.inc.php',
+    'includes/configuration.php',
+    'sites/default/settings.php',
+    'settings.local.php',
+    'app/etc/env.php',
+    'app/etc/local.xml',
+    'db.php',
+    'database.php',
+    'conexion.php',
+    'private/field-options.json',
+    'api/private/config.php',
+    'secrets/keys.txt',
+    'credentials.json',
+    'client_secret.json',
+    'service-account-123.json',
+    'auth.json',
+    '.vscode/sftp.json',
+    '.git/config',
+    '.env',
+  ])('treats %s as secret', (p) => expect(isSecretPath(p)).toBe(true));
+
+  it.each([
+    'index.html',
+    'wp-config-sample.php',
+    'configurador.html',
+    'assets/config.js',
+    'config.json',
+    'settings.html',
+    'data/localization.json',
+    'manifest.webmanifest',
+    'contact.php',
+    'privacy.html',
+    'private-tours.html',
+    '.well-known/security.txt',
+  ])('does not treat %s as secret', (p) => expect(isSecretPath(p)).toBe(false));
 });

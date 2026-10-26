@@ -39,7 +39,7 @@ export function contactFormNote(): string {
   return (
     'This site has a contact form installed and maintained by CR Servers. To add a form to a page, write only HTML and JavaScript that posts to /contact.php: ' +
     'fetch("/contact.php", { method: "POST", headers: { Accept: "application/json" }, body: new FormData(form) }) and read the JSON { ok, error }. ' +
-    'Fields: email (required, the visitor\'s address, used as Reply-To), name, message, optional subject; every other field is included in the email. ' +
+    'Fields: email (required, the visitor\'s address, used as Reply-To), name, message (make it required in the HTML form), optional subject; every other field is included in the email. ' +
     'Add a honeypot: a text input named company, visually hidden with CSS (not type="hidden"), with tabindex="-1", autocomplete="off" and aria-hidden="true", left empty. ' +
     'Show the result on the page without reloading, disable the button while sending, and keep the visitor\'s text if it fails. Show error to the visitor only for status 400; for 429 (too many messages) and 500 or 503 show a short "try again later". ' +
     'The form can\'t send from the preview link; tell the user to test it after publishing. ' +
@@ -56,12 +56,12 @@ export function contactFormInfo(c: ContactForm): Record<string, unknown> {
     request: {
       body: 'multipart/form-data or application/x-www-form-urlencoded (new FormData(form)), or a flat JSON object',
       headers: { Accept: 'application/json' },
-      fields: { email: 'required', name: 'optional', message: 'optional', subject: 'optional, up to 200 characters' },
+      fields: { email: 'required', name: 'optional', message: 'recommended (the endpoint itself only refuses a submission with no content)', subject: 'optional, up to 200 characters' },
       honeypot: 'company',
     },
     response: {
       200: '{ "ok": true, "error": "" }',
-      400: '{ "ok": false, "error": "…" } missing or invalid email, empty or too-short message',
+      400: '{ "ok": false, "error": "…" } missing or invalid email, or a submission with no content',
       429: 'too many submissions from this visitor',
       500: 'mail not configured or sending failed',
       503: 'busy, try again',

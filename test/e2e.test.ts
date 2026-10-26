@@ -1282,15 +1282,43 @@ describe('sites published from GitHub (CR Servers Deploy marker)', () => {
     try {
       const c = await mcpClient(await connect('publish'));
       const info = await call(c, 'get_site_info');
-      expect(info.data.deployed_from_github).toMatchObject({ repository: 'acme/uat-site', commit: 'abcdef123456' });
-      expect(info.data.note).toContain('next deploy');
+      expect(info.data.deployed_from_github).toMatchObject({ repository: 'acme/uat-site', repository_url: 'https://github.com/acme/uat-site', commit: 'abcdef123456' });
+      expect(info.data.deployed_from_github.guidance).toContain('next deploy');
+      expect(info.data.deployed_from_github).not.toHaveProperty('build');
       const d = await call(c, 'start_changeset');
-      expect(d.text).toContain('acme/uat-site');
+      expect(d.text).toContain('https://github.com/acme/uat-site');
+      expect(d.data.deployed_from_github.guidance).toContain('in the repository instead');
       await call(c, 'discard_changeset', { changeset_id: d.data.changeset_id });
       await c.close();
     } finally {
       siteFs.files.delete('.htcrservers-deploy.json');
     }
+  });
+
+  it('a Next.js export gets the compiled-site wording; a malformed marker is ignored', async () => {
+    await siteFs.write('.htcrservers-deploy.json', Buffer.from(JSON.stringify({ tool: 'crservers-static-deploy', repository: 'acme/v0-site', ref: 'refs/heads/main', commit: 'abcdef1234567890' })));
+    siteFs.put('_next/static/chunks/main-1a2b.js', 'x');
+    try {
+      const c = await mcpClient(await connect('publish'));
+      const info = await call(c, 'get_site_info');
+      expect(info.data.deployed_from_github).toMatchObject({ build: 'nextjs-export', deploy_branch: 'main' });
+      expect(info.data.deployed_from_github.guidance).toContain('compiled Next.js static export');
+      await siteFs.write('.htcrservers-deploy.json', Buffer.from('{"tool":"crservers-static-deploy","repository":"acme/v0-site"'));
+      expect((await call(c, 'get_site_info')).data).not.toHaveProperty('deployed_from_github');
+      await c.close();
+    } finally {
+      siteFs.files.delete('.htcrservers-deploy.json');
+      siteFs.files.delete('_next/static/chunks/main-1a2b.js');
+    }
+  });
+
+  it('a site without the marker gets no deploy guidance', async () => {
+    const c = await mcpClient(await connect('publish'));
+    expect((await call(c, 'get_site_info')).data).not.toHaveProperty('deployed_from_github');
+    const d = await call(c, 'start_changeset');
+    expect(d.text).not.toContain('GitHub');
+    await call(c, 'discard_changeset', { changeset_id: d.data.changeset_id });
+    await c.close();
   });
 });
 

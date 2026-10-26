@@ -22,6 +22,8 @@ export interface Draft {
   startFingerprints: Map<string, string>;
   /** Paths whose live copy changed between draft start and first touch. */
   earlyConflicts: Set<string>;
+  /** Hosting placeholder files the preview added to `deletes` (skeleton.ts); recomputed on every preview. */
+  skeletonDeletes: Set<string>;
 }
 
 export interface ReleaseFile {

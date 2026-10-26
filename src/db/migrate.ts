@@ -277,6 +277,11 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       CREATE INDEX support_events_at ON support_events (at);
     `,
   },
+  {
+    // Hosting placeholder files a draft's preview added to its deletions (src/deploy/skeleton.ts).
+    id: '011_draft_skeleton_deletes',
+    sql: `ALTER TABLE drafts ADD COLUMN skeleton_deletes jsonb NOT NULL DEFAULT '[]';`,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

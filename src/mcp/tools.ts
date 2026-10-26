@@ -9,6 +9,7 @@ import { ImportError, assertMediaMatches, fetchPublicUrl, type UrlFetcher } from
 import { MB, PathError, maxFileBytes, normalizeSitePath } from '../deploy/paths.js';
 import { isSkeletonPath } from '../deploy/skeleton.js';
 import { deployNote, deployedFrom, readDeployMarker } from '../deploy/deploymarker.js';
+import { contactFormInfo, readContactForm } from '../deploy/components.js';
 import type { AuditLog } from '../deploy/pgstores.js';
 import type { SiteFs } from '../deploy/sitefs.js';
 import type { PreviewService } from '../preview/preview.js';
@@ -230,14 +231,17 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
   registerTool('get_site_info', { title: 'Site info', description: 'Domain, live URL, permission and latest release.', inputSchema: { site: SITE }, annotations: RO }, (a) =>
     run({ site: a.site }, async ({ site, permission }, fs) => {
       const latest = (await deps.core.listReleases(site.id))[0];
-      const marker = await readDeployMarker(await fs());
-      return ok(`${site.domain} (${permission === 'publish' ? 'editar y publicar' : 'solo vista previa'})`, {
+      const f = await fs();
+      const marker = await readDeployMarker(f);
+      const form = await readContactForm(f);
+      return ok(`${site.domain} (${permission === 'publish' ? 'editar y publicar' : 'solo vista previa'})${form ? '. Tiene formulario de contacto (managed_components.contact_form). / Has a contact form (managed_components.contact_form).' : ''}`, {
         domain: site.domain,
         type: site.kind,
         live_url: `https://${site.domain}/`,
         permission,
         ...(site.protectedDirs.length ? { other_site_folders: site.protectedDirs } : {}),
         ...(marker ? { deployed_from_github: deployedFrom(marker) } : {}),
+        ...(form ? { managed_components: { contact_form: contactFormInfo(form) } } : {}),
         latest_release: latest ? { release: latest.number, when: latest.createdAt, cause: latest.cause } : null,
       });
     })(),
@@ -355,11 +359,13 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
         const d = await deps.core.startDraft(site.id, f, a.note);
         await deps.audit.add(site.id, clientId, 'start_changeset', { changeset_id: d.id });
         const marker = await readDeployMarker(f);
+        const form = await readContactForm(f);
         return ok(`Borrador creado para ${site.domain}. / Draft started for ${site.domain}.${marker ? `\n\n${deployNote(marker)}` : ''}`, {
           changeset_id: d.id,
           site: site.domain,
           expires_at: d.expiresAt,
           ...(marker ? { deployed_from_github: deployedFrom(marker) } : {}),
+          ...(form ? { managed_components: { contact_form: contactFormInfo(form) } } : {}),
         });
       })(),
   );

@@ -1276,6 +1276,35 @@ describe('support correlation (#56)', () => {
   });
 });
 
+describe('managed contact form', () => {
+  it('get_site_info and start_changeset tell the AI how to call /contact.php when the form is installed', async () => {
+    const marker = { tool: 'crservers-components', components: { contact_form: { version: '2.1.0', endpoint: '/contact.php' } } };
+    await siteFs.write('.htcrservers-components.json', Buffer.from(JSON.stringify(marker)));
+    await siteFs.write('contact.php', Buffer.from('<?php'));
+    try {
+      const c = await mcpClient(await connect('publish'));
+      const info = await call(c, 'get_site_info');
+      expect(info.text).toContain('contact form');
+      expect(info.data.managed_components.contact_form).toMatchObject({ enabled: true, version: '2.1.0', endpoint: '/contact.php', method: 'POST' });
+      const d = await call(c, 'start_changeset');
+      expect(d.data.managed_components.contact_form.guidance).toContain('posts to /contact.php');
+      const w = await call(c, 'write_files', { changeset_id: d.data.changeset_id, files: [{ path: 'contact.php', content: '<?php mail();' }] });
+      expect(JSON.stringify(w.data)).toContain('installs and maintains');
+      await call(c, 'discard_changeset', { changeset_id: d.data.changeset_id });
+      await c.close();
+    } finally {
+      siteFs.files.delete('.htcrservers-components.json');
+      siteFs.files.delete('contact.php');
+    }
+  });
+
+  it('a site without the form gets no managed_components', async () => {
+    const c = await mcpClient(await connect('publish'));
+    expect((await call(c, 'get_site_info')).data).not.toHaveProperty('managed_components');
+    await c.close();
+  });
+});
+
 describe('sites published from GitHub (CR Servers Deploy marker)', () => {
   it('get_site_info, start_changeset and publish say the next deploy replaces changes made here', async () => {
     await siteFs.write('.htcrservers-deploy.json', Buffer.from(JSON.stringify({ tool: 'crservers-static-deploy', repository: 'acme/uat-site', commit: 'abcdef1234567890', deployed_at: '2026-10-16T18:00:00Z' })));

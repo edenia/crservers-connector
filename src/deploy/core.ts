@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { MB, assertWritable, isSecretPath, isTextPath, maxFileBytes, normalizeSiteDir, normalizeSitePath } from './paths.js';
 import { baseOf, dirOf, type SiteEntry, type SiteFs } from './sitefs.js';
+import { HOME_PAGES, isSkeletonPath, matchesSkeleton } from './skeleton.js';
 import type { BlobStore, Draft, DraftStore, Release, ReleaseFile, ReleaseStore } from './stores.js';
 
 /**
@@ -66,6 +67,8 @@ export interface PreviewSummary {
   modified: string[];
   deleted: string[];
   conflicts: string[];
+  /** The hosting's placeholder files this draft removes (also in `deleted`); see skeleton.ts. */
+  placeholders: string[];
 }
 
 const READ_TEXT_LIMIT = 1 * MB;
@@ -122,6 +125,7 @@ export class DeployCore {
       base: new Map(),
       startFingerprints: new Map(live.map((e) => [e.path, fingerprint(e)])),
       earlyConflicts: new Set(),
+      skeletonDeletes: new Set(),
     };
     await this.drafts.put(draft);
     return draft;
@@ -179,6 +183,7 @@ export class DeployCore {
         await this.touch(d, fs, path, f.baseHash);
         d.writes.set(path, f.content);
         d.deletes.delete(path);
+        d.skeletonDeletes.delete(path);
         results.push({ path, ok: true });
       } catch (e) {
         results.push({ path, ok: false, error: (e as Error).message });
@@ -202,6 +207,7 @@ export class DeployCore {
         await this.touch(d, fs, path);
         d.writes.delete(path);
         if (existsLive) d.deletes.add(path);
+        d.skeletonDeletes.delete(path);
         results.push({ path, ok: true });
       } catch (e) {
         results.push({ path, ok: false, error: (e as Error).message });
@@ -306,13 +312,51 @@ export class DeployCore {
   /** Marks the current draft version as previewed. Scans and the preview site are added by callers. */
   async preview(draftId: string, siteId: string, fs: SiteFs): Promise<PreviewSummary> {
     const d = await this.getDraft(draftId, siteId);
+    if (await this.planSkeletonCleanup(d, fs)) d.version++;
     const { conflicts } = await this.conflicts(d, fs);
     const added: string[] = [];
     const modified: string[] = [];
     for (const p of d.writes.keys()) (d.base.get(p) === null ? added : modified).push(p);
     d.previewedVersion = d.version;
     await this.drafts.put(d);
-    return { added: added.sort(), modified: modified.sort(), deleted: [...d.deletes].sort(), conflicts };
+    return { added: added.sort(), modified: modified.sort(), deleted: [...d.deletes].sort(), conflicts, placeholders: [...d.skeletonDeletes].sort() };
+  }
+
+  /**
+   * A site that still holds only the hosting's placeholder files (skeleton.ts) gets them removed by the
+   * draft that brings its home page: they become deletions of the draft, so the preview lists them, the
+   * conflict check covers them and revert brings them back. Only exact matches, and never a path the
+   * user wrote or deleted in the draft. Redone on every preview; returns whether the plan changed.
+   */
+  private async planSkeletonCleanup(d: Draft, fs: SiteFs): Promise<boolean> {
+    const before = [...d.skeletonDeletes].sort().join('\n');
+    for (const p of d.skeletonDeletes) {
+      d.deletes.delete(p);
+      d.base.delete(p);
+      d.earlyConflicts.delete(p);
+    }
+    d.skeletonDeletes.clear();
+    for (const [p, hash] of await this.skeletonToRemove(d, fs)) {
+      await this.touch(d, fs, p, hash);
+      d.deletes.add(p);
+      d.skeletonDeletes.add(p);
+    }
+    return [...d.skeletonDeletes].sort().join('\n') !== before;
+  }
+
+  /** Placeholder files to remove (path → live hash), or none unless every visible live file is one. */
+  private async skeletonToRemove(d: Draft, fs: SiteFs): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!HOME_PAGES.some((p) => d.writes.has(p))) return out;
+    // Hidden files (.htaccess, .well-known/) aren't site pages and AI Connect never deletes them.
+    const live = [...d.startFingerprints.keys()].filter((p) => !p.split('/').some((s) => s.startsWith('.')));
+    if (!live.length || !live.every(isSkeletonPath)) return out;
+    for (const p of live) {
+      const data = (await fs.stat(p)) ? await fs.read(p) : null;
+      if (!data || !matchesSkeleton(p, data)) return new Map();
+      if (!d.writes.has(p) && !d.deletes.has(p)) out.set(p, sha256(data));
+    }
+    return out;
   }
 
   /**

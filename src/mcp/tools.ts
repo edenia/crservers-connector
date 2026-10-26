@@ -7,6 +7,7 @@ import { z } from 'zod';
 import { DeployCore, DeployError } from '../deploy/core.js';
 import { ImportError, assertMediaMatches, fetchPublicUrl, type UrlFetcher } from '../deploy/fetchurl.js';
 import { MB, PathError, maxFileBytes, normalizeSitePath } from '../deploy/paths.js';
+import { isSkeletonPath } from '../deploy/skeleton.js';
 import { deployNote, deployedFrom, readDeployMarker } from '../deploy/deploymarker.js';
 import type { AuditLog } from '../deploy/pgstores.js';
 import type { SiteFs } from '../deploy/sitefs.js';
@@ -97,6 +98,11 @@ function publicDetail(d: Record<string, unknown>): Record<string, unknown> {
   if (d.approved_in_browser) out.approved_in_browser = true;
   if (typeof d.approve_every_publish === 'boolean') out.approve_every_publish = d.approve_every_publish;
   return out;
+}
+
+/** Output text for preview_changeset when the draft also removes the hosting's placeholder files. */
+function placeholderNote(paths: string[]): string {
+  return `Incluye borrar los archivos provisionales que trae toda cuenta de hospedaje nueva (${paths.join(', ')}), porque el sitio aún no tiene nada más. Solo se borran los que siguen sin cambios, y revert_release los devuelve. / Also removes the placeholder files every new hosting account starts with (${paths.join(', ')}), since the site has nothing else yet. Only unchanged placeholder files are removed; revert_release brings them back. Mention this to the user with the summary.`;
 }
 
 function ok(summary: string, data: Record<string, unknown>): CallToolResult {
@@ -265,7 +271,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
           entries: entries.map((e) => ({ path: e.path, type: e.type, size: e.size })),
           ...(site.protectedDirs.length ? { other_site_folders: site.protectedDirs } : {}),
           ...(backups.length
-            ? { note: `These look like backup copies: ${backups.join(', ')}. Files in the web root are public, and AI Connect can't move or delete them. Suggest the user move them out of the web root (control panel file manager or FTP). AI Connect keeps its own copy of every file before each publish.` }
+            ? { note: `These look like backup copies: ${backups.join(', ')}. Files in the web root are public, and AI Connect can't move or delete them. Suggest the user move them out of the web root (control panel file manager or FTP). AI Connect keeps its own copy of every file before each publish.${backups.some(isSkeletonPath) ? ` Some may be copies of the placeholder page every new hosting account starts with: if the site holds nothing else yet, the first publish of a home page removes them (preview_changeset lists them).` : ''}` }
             : {}),
         });
       })(),
@@ -470,11 +476,12 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
     },
     (a) =>
       run({ changesetId: a.changeset_id }, async ({ site }, fs) => {
-        const s = await deps.core.preview(a.changeset_id, site.id, await fs());
+        const { placeholders, ...s } = await deps.core.preview(a.changeset_id, site.id, await fs());
         const line = `${s.added.length} nuevos, ${s.modified.length} modificados, ${s.deleted.length} borrados${s.conflicts.length ? `, ${s.conflicts.length} en conflicto` : ''}.`;
         const link = deps.preview ? await deps.preview.createLink(a.changeset_id, site.id) : undefined;
-        return ok(`${line} / ${s.added.length} added, ${s.modified.length} modified, ${s.deleted.length} deleted.${link ? `\nVista previa / Preview: ${link.url}` : ''}`, {
+        return ok(`${line} / ${s.added.length} added, ${s.modified.length} modified, ${s.deleted.length} deleted.${link ? `\nVista previa / Preview: ${link.url}` : ''}${placeholders.length ? `\n\n${placeholderNote(placeholders)}` : ''}`, {
           ...s,
+          ...(placeholders.length ? { placeholder_files_removed: placeholders } : {}),
           ready_to_publish: s.conflicts.length === 0,
           ...(link ? { preview_url: link.url, preview_expires_at: link.expiresAt } : {}),
         });

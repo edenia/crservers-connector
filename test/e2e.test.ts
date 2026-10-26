@@ -20,6 +20,7 @@ import { ApprovalService, approvalReasons } from '../src/approvals/approvals.js'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { SiteRepo } from '../src/sites.js';
+import { skeletonFiles } from './fixtures/skeleton.js';
 
 /**
  * Full authorization-code flow as an AI host drives it, against real Postgres and a fake
@@ -488,6 +489,76 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     expect((await call(c2, 'read_file', { path: 'p.html', changeset_id: '00000000-0000-0000-0000-000000000000' })).isError).toBe(true);
     await c2.close();
   });
+});
+
+describe('placeholder files of a new hosting account', () => {
+  /** Runs `fn` with the site holding only the skeleton, then puts the usual test files back. */
+  async function onFreshSite(fn: () => Promise<void>) {
+    const saved = new Map(siteFs.files);
+    siteFs.files.clear();
+    for (const [p, d] of Object.entries(skeletonFiles('uat.example'))) siteFs.put(p, d);
+    try {
+      await fn();
+    } finally {
+      siteFs.files.clear();
+      for (const [p, f] of saved) siteFs.files.set(p, f);
+    }
+  }
+
+  it('the first home page removes them; the preview says so; revert brings them back', () =>
+    onFreshSite(async () => {
+      const before = new Map([...siteFs.files].map(([p, f]) => [p, f.data]));
+      const c = await mcpClient(await connect('publish'));
+      const { data: draft } = await call(c, 'start_changeset');
+      await call(c, 'write_files', { changeset_id: draft.changeset_id, files: [{ path: 'index.html', content: '<h1>Café</h1>' }] });
+      const pv = await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+      expect(pv.data).toMatchObject({
+        modified: ['index.html'],
+        deleted: ['crservers-logo.svg', 'index.html.orig', 'robots.txt'],
+        placeholder_files_removed: ['crservers-logo.svg', 'index.html.orig', 'robots.txt'],
+        ready_to_publish: true,
+      });
+      expect(pv.text).toContain('placeholder files every new hosting account starts with');
+      expect(pv.text).not.toMatch(/siteworx|interworx/i);
+
+      const pub = await call(c, 'publish', { changeset_id: draft.changeset_id });
+      expect(pub.isError).toBe(false);
+      expect([...siteFs.files.keys()]).toEqual(['index.html']);
+
+      expect((await call(c, 'revert_release', { release: pub.data.release })).isError).toBe(false);
+      expect(new Map([...siteFs.files].map(([p, f]) => [p, f.data]))).toEqual(before);
+      await c.close();
+    }));
+
+  it('with index.htm as the new home page, the preview shows it rather than a missing index.html', () =>
+    onFreshSite(async () => {
+      const c = await mcpClient(await connect('publish'));
+      const { data: draft } = await call(c, 'start_changeset');
+      await call(c, 'write_files', { changeset_id: draft.changeset_id, files: [{ path: 'index.htm', content: '<h1>Café nuevo</h1>' }] });
+      const pv = await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+      expect(pv.data.placeholder_files_removed).toContain('index.html');
+      const home = await get(new URL(pv.data.preview_url).pathname);
+      expect(home.status).toBe(200);
+      expect(await home.text()).toContain('Café nuevo');
+      expect((await get(`${new URL(pv.data.preview_url).pathname}robots.txt`)).status).toBe(404);
+      await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
+      await c.close();
+    }));
+
+  it('a customised index.html is left alone, and so is the rest', () =>
+    onFreshSite(async () => {
+      siteFs.put('index.html.orig', '<h1>Mi copia</h1>');
+      const c = await mcpClient(await connect('publish'));
+      const { data: draft } = await call(c, 'start_changeset');
+      await call(c, 'write_files', { changeset_id: draft.changeset_id, files: [{ path: 'index.html', content: '<h1>Café</h1>' }] });
+      const pv = await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+      expect(pv.data).toMatchObject({ modified: ['index.html'], deleted: [] });
+      expect(pv.data.placeholder_files_removed).toBeUndefined();
+      expect((await call(c, 'publish', { changeset_id: draft.changeset_id })).isError).toBe(false);
+      expect([...siteFs.files.keys()].sort()).toEqual(['crservers-logo.svg', 'index.html', 'index.html.orig', 'robots.txt']);
+      expect(siteFs.text('index.html.orig')).toBe('<h1>Mi copia</h1>');
+      await c.close();
+    }));
 });
 
 describe('large files', () => {

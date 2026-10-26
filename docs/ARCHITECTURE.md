@@ -130,6 +130,13 @@ When it's on, `publish` doesn't go live. It returns an approval link for the AI 
 1. New content is uploaded under temporary names. If that fails, nothing on the live site changed.
 2. Files are renamed into place, then deletions happen last. If this fails, whatever was already applied is restored from the undo record.
 
+**Placeholder files.** Every new hosting account starts with a placeholder page ("Test Page for <domain>" or "Sitio en preparación"), copies of it (`index.html.orig`, `index.html.bak-…`), logos, a default `robots.txt` and the page's fonts and images (`src/deploy/skeleton.ts` lists them). When a draft brings a home page (`index.html` or `index.htm`) to a site that still holds only these files, `preview_changeset` adds their deletion to the draft, says so in its output (`placeholder_files_removed`), and the release's undo record keeps them, so `revert_release` brings them back. The rules:
+- A file counts only when both its path and its exact content match a known placeholder. The page is compared after the domain in its title is put back to the placeholder's own marker, so one fingerprint covers every domain.
+- Any other visible file on the site (a customer page, an edited copy of the placeholder, an older site's leftovers) means the site isn't fresh, and nothing is added. Hidden files such as `.well-known/` don't count either way and are never deleted.
+- Files the user wrote or deleted in the draft are theirs: the cleanup leaves them alone.
+- It's recomputed on every preview, so a draft that no longer brings a home page drops it again. The conflict check covers these files like any other.
+- Empty folders (`cgi-bin/`, the fonts folder) stay; the connector only deletes files.
+
 **Importing files.** Photos and other media rarely fit through a chat as base64, so `import_from_url` downloads one from a public link straight into the draft. Typical sources are an image the AI generated, a stock photo, or a Google Drive or Dropbox share link, which is converted to a direct download.
 - Media only: images, video, audio, fonts and PDF.
 - The first bytes must match the extension, so a sign-in page can't land as `foto.png`.

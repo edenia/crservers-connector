@@ -1,9 +1,10 @@
 import type { SiteFs } from './sitefs.js';
 
 /**
- * CR Servers Static Deploy (edenia/crservers-static-deploy) uploads this file with every deploy from
+ * CR Servers Deploy (repo edenia/crservers-deploy; formerly "Static Deploy" in crservers-static-deploy) uploads this file with every deploy from
  * GitHub. The ".ht" prefix keeps it from ever being served (Apache denies .ht* files), and the AI
  * can't write or delete dot-files, so only the deploy workflow controls it.
+ * The marker's `tool` value keeps the old product name ("crservers-static-deploy") on purpose.
  */
 export const DEPLOY_MARKER = '.htcrservers-deploy.json';
 
@@ -17,7 +18,7 @@ export interface DeployMarker {
 const REPO_RE = /^[A-Za-z0-9_.-]{1,100}\/[A-Za-z0-9_.-]{1,100}$/;
 const SHA_RE = /^[0-9a-f]{7,40}$/;
 
-/** The site's Static Deploy marker, or null when there is none (or it doesn't look like ours). */
+/** The site's CR Servers Deploy marker, or null when there is none (or it doesn't look like ours). */
 export async function readDeployMarker(fs: SiteFs): Promise<DeployMarker | null> {
   try {
     const st = await fs.stat(DEPLOY_MARKER);
@@ -36,7 +37,7 @@ export async function readDeployMarker(fs: SiteFs): Promise<DeployMarker | null>
 
 /** What the tools tell the AI (and through it, the user) about a GitHub-deployed site. */
 export function deployNote(m: DeployMarker): string {
-  return `This site is published from GitHub (${m.repository}) with CR Servers Static Deploy. The next deploy from that repository replaces files changed here, so a change made only here won't last. Let the user know, and suggest making the change in the repository too.`;
+  return `This site is published from GitHub (${m.repository}) with CR Servers Deploy. The next deploy from that repository replaces files changed here, so a change made only here won't last. Let the user know, and suggest making the change in the repository too.`;
 }
 
 export function deployedFrom(m: DeployMarker): Record<string, unknown> {

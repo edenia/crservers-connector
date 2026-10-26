@@ -41,7 +41,7 @@ A **connection** is one AI app authorized by one client for one or more sites, w
 
 ### Sites published from GitHub
 
-A site can also be published from a GitHub repository with **CR Servers Static Deploy** (edenia/crservers-static-deploy). Each deploy uploads `.htcrservers-deploy.json` with the repository, commit, ref and time:
+A site can also be published from a GitHub repository with **CR Servers Deploy** (repo edenia/crservers-deploy, formerly crservers-static-deploy). Each deploy uploads `.htcrservers-deploy.json` with the repository, commit, ref and time:
 - **Never served on the web:** Apache refuses every `.ht*` file.
 - **Read-only for the AI:** it can't write or delete dot-files.
 

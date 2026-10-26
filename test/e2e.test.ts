@@ -1205,7 +1205,7 @@ describe('support correlation (#56)', () => {
   });
 });
 
-describe('sites published from GitHub (Static Deploy marker)', () => {
+describe('sites published from GitHub (CR Servers Deploy marker)', () => {
   it('get_site_info, start_changeset and publish say the next deploy replaces changes made here', async () => {
     await siteFs.write('.htcrservers-deploy.json', Buffer.from(JSON.stringify({ tool: 'crservers-static-deploy', repository: 'acme/uat-site', commit: 'abcdef1234567890', deployed_at: '2026-10-16T18:00:00Z' })));
     try {

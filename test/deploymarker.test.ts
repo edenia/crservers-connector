@@ -4,7 +4,7 @@ import { MemorySiteFs } from '../src/deploy/sitefs.js';
 
 const marker = (o: Record<string, unknown>) => new MemorySiteFs({ [DEPLOY_MARKER]: JSON.stringify(o), 'index.html': '<h1>x</h1>' });
 
-describe('Static Deploy marker', () => {
+describe('CR Servers Deploy marker', () => {
   it('reads what the deploy workflow writes', async () => {
     const m = await readDeployMarker(marker({ tool: 'crservers-static-deploy', version: 'v1.4.0', repository: 'acme/site', ref: 'refs/heads/main', commit: '0123456789abcdef0123456789abcdef01234567', deployed_at: '2026-10-16T18:00:00Z' }));
     expect(m && deployedFrom(m)).toEqual({ repository: 'acme/site', commit: '0123456789ab', ref: 'refs/heads/main', deployed_at: '2026-10-16T18:00:00.000Z' });

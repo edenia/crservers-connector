@@ -530,6 +530,21 @@ describe('placeholder files of a new hosting account', () => {
       await c.close();
     }));
 
+  it('with index.htm as the new home page, the preview shows it rather than a missing index.html', () =>
+    onFreshSite(async () => {
+      const c = await mcpClient(await connect('publish'));
+      const { data: draft } = await call(c, 'start_changeset');
+      await call(c, 'write_files', { changeset_id: draft.changeset_id, files: [{ path: 'index.htm', content: '<h1>Café nuevo</h1>' }] });
+      const pv = await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+      expect(pv.data.placeholder_files_removed).toContain('index.html');
+      const home = await get(new URL(pv.data.preview_url).pathname);
+      expect(home.status).toBe(200);
+      expect(await home.text()).toContain('Café nuevo');
+      expect((await get(`${new URL(pv.data.preview_url).pathname}robots.txt`)).status).toBe(404);
+      await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
+      await c.close();
+    }));
+
   it('a customised index.html is left alone, and so is the rest', () =>
     onFreshSite(async () => {
       siteFs.put('index.html.orig', '<h1>Mi copia</h1>');

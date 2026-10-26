@@ -237,7 +237,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
         live_url: `https://${site.domain}/`,
         permission,
         ...(site.protectedDirs.length ? { other_site_folders: site.protectedDirs } : {}),
-        ...(marker ? { deployed_from_github: deployedFrom(marker), note: deployNote(marker) } : {}),
+        ...(marker ? { deployed_from_github: deployedFrom(marker) } : {}),
         latest_release: latest ? { release: latest.number, when: latest.createdAt, cause: latest.cause } : null,
       });
     })(),
@@ -359,7 +359,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
           changeset_id: d.id,
           site: site.domain,
           expires_at: d.expiresAt,
-          ...(marker ? { deployed_from_github: deployedFrom(marker), note: deployNote(marker) } : {}),
+          ...(marker ? { deployed_from_github: deployedFrom(marker) } : {}),
         });
       })(),
   );
@@ -539,7 +539,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
           release: rel.number,
           live_url: `https://${site.domain}/`,
           files_changed: rel.files.length,
-          ...(marker ? { deployed_from_github: deployedFrom(marker), note: deployNote(marker) } : {}),
+          ...(marker ? { deployed_from_github: deployedFrom(marker) } : {}),
         });
       })(),
   );

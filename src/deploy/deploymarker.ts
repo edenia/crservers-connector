@@ -1,9 +1,10 @@
 import type { SiteFs } from './sitefs.js';
 
 /**
- * CR Servers Deploy (repo edenia/crservers-static-deploy; formerly "Static Deploy") uploads this file with every deploy from
+ * CR Servers Deploy (repo edenia/crservers-deploy; formerly "Static Deploy" in crservers-static-deploy) uploads this file with every deploy from
  * GitHub. The ".ht" prefix keeps it from ever being served (Apache denies .ht* files), and the AI
  * can't write or delete dot-files, so only the deploy workflow controls it.
+ * The marker's `tool` value keeps the old product name ("crservers-static-deploy") on purpose.
  */
 export const DEPLOY_MARKER = '.htcrservers-deploy.json';
 

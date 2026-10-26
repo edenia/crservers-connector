@@ -60,6 +60,9 @@ export function extOf(path: string): string {
 /** Paths installed and owned by managed components (e.g. the contact form): readable, never writable by the AI. */
 export const COMPONENT_PATHS = ['contact.php', 'vendor/', 'composer.json', 'composer.lock'];
 
+const COMPONENT_REFUSAL =
+  'This file belongs to a component CR Servers installs and maintains (the contact form uses contact.php, vendor/ and composer files). Don\'t write or replace it: to add a contact form, write the HTML form in a page and post to /contact.php (see managed_components in get_site_info)';
+
 function isComponentPath(path: string): boolean {
   return COMPONENT_PATHS.some((p) => (p.endsWith('/') ? path.startsWith(p) : path === p));
 }
@@ -90,7 +93,7 @@ export function assertWritable(path: string): void {
   const segments = path.split('/');
   const base = segments[segments.length - 1] ?? '';
 
-  if (isComponentPath(path)) throw new PathError('This file belongs to a managed component and can only be changed by enabling or updating that component', path);
+  if (isComponentPath(path)) throw new PathError(COMPONENT_REFUSAL, path);
 
   const isWellKnown = segments[0] === '.well-known';
   if (!isWellKnown && segments.some((s) => s.startsWith('.'))) {

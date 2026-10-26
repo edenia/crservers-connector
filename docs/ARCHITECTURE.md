@@ -49,6 +49,14 @@ When the marker is there, `get_site_info`, `start_changeset` and `publish` inclu
 
 **Compiled sites.** With the marker present, the connector also lists the web root once. A `_next/` folder, or a page with its `.txt` page data next to it (`about.html` + `about.txt`; `robots`, `llms` and similar names don't count), marks a Next.js static export (for example a v0 site): `build: "nextjs-export"`. The guidance then says the files are compiled output (generated pages, hashed `_next/` chunks, `.txt` page data), not the source, and that a quick edit to a page may not show when visitors move between pages inside the site, because Next's client navigation loads the `.txt` data rather than the `.html`. A marker that doesn't parse or doesn't look like ours is ignored, as before. Nothing else changes. The usual conflict and drift checks still stop AI Connect from overwriting files a deploy changed.
 
+### Managed components
+
+Server code CR Servers installs and updates on a site, which the AI only wires into pages. The first is the **contact form**: `contact.php` with PHPMailer in `vendor/` (the `static-site-contact/` bundle from edenia/crservers-deploy), its mail settings outside the web root. The client-area plugin installs it and writes `.htcrservers-components.json` in the web root last (and removes it first when the form is turned off):
+- **Never served on the web** (`.ht*`), **read-only for the AI** (dot-file), **no secrets or addresses** in it.
+- Trusted only when `contact.php` is also there and the endpoint is `/contact.php`.
+
+When the form is installed, `get_site_info` and `start_changeset` include `managed_components.contact_form`: `enabled`, `version`, `endpoint`, `method`, the request (`email` required and used as Reply-To, `name`, `message` (recommended; the endpoint only refuses a submission with no content), optional `subject`, honeypot `company`, `Accept: application/json`), the responses (`{ok, error}`; 400, 429, 500, 503) and the per-visitor limits, plus `guidance` on writing the HTML/JS form. The AI can read the component's files (`contact.php`, `vendor/`, `composer.json`, `composer.lock`) but writing them is refused with a reason that points at `/contact.php`. Its config lives outside the web root, out of the connector's reach. Turning the form on or off happens in the client area, never through the connector, which holds no node key or mail password (`src/deploy/components.ts`).
+
 ## Automatic site setup
 
 The connector publishes through a jailed FTP deploy user per site (per domain), one that can reach only that site's folder. The main domain's user is `crsconnect@<main domain>`; the service's other domains get `crsconnect<8 hex>@<main domain>`. Nobody creates these by hand:
@@ -152,7 +160,7 @@ When it's on, `publish` doesn't go live. It returns an approval link for the AI 
 - **Allowed:** `html htm css js mjs json xml txt md svg png jpg jpeg webp gif avif ico woff woff2 ttf otf mp4 webm mp3 pdf webmanifest`, plus `robots.txt`, `sitemap.xml` and `/.well-known/*`.
 - **Refused:** server-side code (PHP and similar), `.htaccess`, hidden files and folders, and archives inside the site.
 - **Files that may hold secrets** (`src/deploy/paths.ts`, `isSecretPath`): site config such as `wp-config.php`, `config*.php`, `settings*.php`, `configuration.php`, `env.php`, `db.php`; credential files such as `credentials*.json`, `client_secret*.json`, `service-account*.json`, `auth.json`, `local.xml`; anything in a `private/`, `secret(s)/` or `credentials/` folder; anything in a hidden folder (except `/.well-known/`). `read_file` returns their size and hash only (`secret: true`), never the content, and they can't be written or deleted. The rule matches on names, so a secret kept in an ordinary file isn't covered: keep server config outside the web root.
-- **Managed components** (such as a contact form) are installed by CR Servers. Their files are readable by the AI but never writable.
+- **Managed components** (such as a contact form) are installed by CR Servers. Their files are readable by the AI but never writable (see "Managed components").
 - **Out of reach entirely:** email, DNS, databases, SSL, billing and the client's other sites.
 
 ## Limits

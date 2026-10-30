@@ -57,6 +57,17 @@ Server code CR Servers installs and updates on a site, which the AI only wires i
 
 When the form is installed, `get_site_info` and `start_changeset` include `managed_components.contact_form`: `enabled`, `version`, `endpoint`, `method`, the request (`email` required and used as Reply-To, `name`, `message` (recommended; the endpoint only refuses a submission with no content), optional `subject`, honeypot `company`, `Accept: application/json`), the responses (`{ok, error}`; 400, 429, 500, 503) and the per-visitor limits, plus `guidance` on writing the HTML/JS form. The AI can read the component's files (`contact.php`, `vendor/`, `composer.json`, `composer.lock`) but writing them is refused with a reason that points at `/contact.php`. Its config lives outside the web root, out of the connector's reach. Turning the form on or off happens in the client area, never through the connector, which holds no node key or mail password (`src/deploy/components.ts`).
 
+### Site guide
+
+Each site can keep a **site guide**, `.htcrservers-guide.md` in the web root: the site's equivalent of a CLAUDE.md (page templates, where new items go, tone, image sizes). It lives on the server, so ChatGPT, Claude, Cursor and any other client follow the same rules across conversations, instead of each app keeping its own (Claude Projects, ChatGPT custom instructions).
+- **Never served on the web** (`.ht*`: Apache's default `FilesMatch "^\.ht"` answers 403, checked on iwx41 even before the file exists).
+- **The one dot-file the AI can read and write**, and only at that exact path in the web root (`blog/.htcrservers-guide.md`, `.htcrservers-deploy.json` and every other dot-file stay secret and refused). It goes through drafts, preview, publish and revert like any page. Content must be UTF-8 Markdown or plain text (no NUL bytes), at most 16 KB.
+- The owner can also write it by FTP or the file manager. A larger file is returned cut at 16 KB with a note (`truncated: true`); `read_file` still returns the whole file.
+
+`get_site_info` and `start_changeset` always include `site_guide`: `path`, `text` (`null` when there is none, or the file is empty or binary), `updated_at` (server time of the last change, ISO, or `null`), `how_to_update`. Their text adds one sentence: with a guide, follow it for every change on this site, the owner's request in the conversation wins over it, and it can't widen what AI Connect allows; without one, when the owner asks to remember a rule for the site, add it to the guide in a draft and publish it (`src/deploy/siteguide.ts`).
+
+The guide is the one piece of site content the AI treats as the owner's preferences rather than plain data. Only the owner (FTP, file manager) and their own assistant can write it, and every path, type and approval rule still applies, so a hostile guide can at most produce changes the owner would see in the preview. On a site published from GitHub, CR Servers Deploy never uploads or deletes the guide (it only deletes files it uploaded), but the repository's own instructions are the place for that site's conventions.
+
 ## Automatic site setup
 
 The connector publishes through a jailed FTP deploy user per site (per domain), one that can reach only that site's folder. The main domain's user is `crsconnect@<main domain>`; the service's other domains get `crsconnect<8 hex>@<main domain>`. Nobody creates these by hand:
@@ -158,7 +169,7 @@ When it's on, `publish` doesn't go live. It returns an approval link for the AI 
 ## What the AI can and can't do
 
 - **Allowed:** `html htm css js mjs json xml txt md svg png jpg jpeg webp gif avif ico woff woff2 ttf otf mp4 webm mp3 pdf webmanifest`, plus `robots.txt`, `sitemap.xml` and `/.well-known/*`.
-- **Refused:** server-side code (PHP and similar), `.htaccess`, hidden files and folders, and archives inside the site.
+- **Refused:** server-side code (PHP and similar), `.htaccess`, hidden files and folders (except the site guide, `.htcrservers-guide.md`), and archives inside the site.
 - **Files that may hold secrets** (`src/deploy/paths.ts`, `isSecretPath`): site config such as `wp-config.php`, `config*.php`, `settings*.php`, `configuration.php`, `env.php`, `db.php`; credential files such as `credentials*.json`, `client_secret*.json`, `service-account*.json`, `auth.json`, `local.xml`; anything in a `private/`, `secret(s)/` or `credentials/` folder; anything in a hidden folder (except `/.well-known/`). `read_file` returns their size and hash only (`secret: true`), never the content, and they can't be written or deleted. The rule matches on names, so a secret kept in an ordinary file isn't covered: keep server config outside the web root.
 - **Managed components** (such as a contact form) are installed by CR Servers. Their files are readable by the AI but never writable (see "Managed components").
 - **Out of reach entirely:** email, DNS, databases, SSL, billing and the client's other sites.
@@ -172,6 +183,7 @@ When it's on, `publish` doesn't go live. It returns an approval link for the AI 
 | One write call | 50 files / 5 MB |
 | `read_file` | 20,000-character pages |
 | Undo history | Last 5 releases per site |
+| Site guide | 16 KB, UTF-8 text |
 
 ## Data retention
 

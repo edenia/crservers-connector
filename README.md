@@ -72,6 +72,7 @@ AI assistant ──MCP──▶ connector ──FTPS──▶ the client's web r
 - **Undo.** Before each publish, the previous version of every touched file is saved; the last 5 releases can be reverted, and a revert can itself be undone.
 - **Safe publishing.** Uploads go to temporary names first, then are renamed into place; a failure halfway is rolled back automatically.
 - **Static by default.** HTML, CSS, JS, images, video, fonts and PDF. Server-side code, `.htaccess` and hidden files are refused.
+- **Site guide.** `.htcrservers-guide.md` in the web root (never served) holds the site's conventions; every assistant gets it from `get_site_info` and `start_changeset`, and can update it through a draft when the owner asks it to remember a rule.
 
 More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 

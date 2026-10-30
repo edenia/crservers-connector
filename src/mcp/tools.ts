@@ -1,4 +1,4 @@
-import { randomBytes } from 'node:crypto';
+import { newRef } from '../crypto.js';
 import type { SupportLog } from '../db/support.js';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
@@ -119,13 +119,6 @@ export interface Trace {
   siteId?: string;
   serviceId?: number;
   ref?: string;
-}
-
-const REF_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O, 1/I/L: easy to read out over the phone
-
-/** Short reference id a customer can quote to support; logged with the call. */
-export function newRef(): string {
-  return Array.from(randomBytes(6), (b) => REF_ALPHABET[b % REF_ALPHABET.length]).join('');
 }
 
 function fail(message: string, data: Record<string, unknown> = {}): CallToolResult {

@@ -1,13 +1,14 @@
 import type { Pool } from 'pg';
 
 /**
- * Support records (connector #56): one row per tool call and per session start, so support can find a
+ * Support records (connector #56): one row per tool call, per session start and per refused connection
+ * (the OAuth callback said access_denied after the client consented), so support can find a
  * customer's problem from a reference id or a hosting service without asking for the time and the app.
  * Ids and outcomes only, never arguments, file contents or results. Kept RETENTION.supportDays
  * (src/db/cleanup.ts), stated in the privacy policy. Request logs (stdout) carry only the random ref.
  */
 export interface SupportEvent {
-  kind: 'tool_call' | 'initialize';
+  kind: 'tool_call' | 'initialize' | 'connect_refused';
   ref?: string;
   tool?: string;
   ok?: boolean;

@@ -282,6 +282,15 @@ const MIGRATIONS: { id: string; sql: string }[] = [
     id: '011_draft_skeleton_deletes',
     sql: `ALTER TABLE drafts ADD COLUMN skeleton_deletes jsonb NOT NULL DEFAULT '[]';`,
   },
+  {
+    // Refused connections (src/auth/provider.ts) are support records too: today's evidence of a
+    // refused first connection was only in the logs of a pod that has since restarted.
+    id: '012_support_connect_refused',
+    sql: `
+      ALTER TABLE support_events DROP CONSTRAINT support_events_kind_check;
+      ALTER TABLE support_events ADD CONSTRAINT support_events_kind_check CHECK (kind IN ('tool_call', 'initialize', 'connect_refused'));
+    `,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

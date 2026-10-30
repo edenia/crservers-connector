@@ -199,7 +199,7 @@ A daily job deletes what's past its period (`src/db/cleanup.ts`). The public pri
 | Expired tokens | Deleted a day after expiry |
 | Sign-in requests, one-time codes, owner sign-ins, event nonces | Deleted a day after expiry |
 | Approval requests | 90 days after the decision or expiry |
-| Support records (`support_events`: tool, result, error message, reference id, site, hosting service, OAuth client, app name) | 30 days |
+| Support records (`support_events`: tool, result, error message, reference id, site, hosting service, OAuth client, app name; also refused connections with the reason and domain) | 30 days |
 | Request logs (stdout) | Not collected by a central log system: they stay in the container log files on the node, rotated by the kubelet, and are lost when the pod is removed. (The cluster's Loki holds only another workload's logs.) IP addresses are anonymized and the lines carry no account, site or service ids (a failed tool call carries only its random reference id), so they hold no personal data |
 
 ## Operations

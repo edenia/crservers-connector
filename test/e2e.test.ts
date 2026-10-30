@@ -42,6 +42,8 @@ let provider: ConnectorOAuthProvider;
 const siteFs = new MemorySiteFs({ 'index.html': '<h1>Inicio</h1>', 'lotes.html': '<h1>Lotes</h1><p>$50.000</p>', 'assets/a.css': 'a{}' });
 siteFs.close = async () => undefined;
 const caResults = new Map<string, ClientAreaGrant | null>();
+/** What the AI host shows when a site couldn't be enabled: ES / EN, with a support reference. */
+const NOT_ENABLED = /^No pudimos activar su sitio para la IA\. .*referencia ([A-HJ-NP-Z2-9]{6})\. \/ Your site could not be enabled for AI publishing\. .*reference \1\.$/;
 const liveFetches: string[] = [];
 let sitesRepo: SiteRepo;
 /** The client area's current layout per hosting service; unset = what the connector already stores. */
@@ -78,6 +80,7 @@ beforeAll(async () => {
     mcpUrl,
     clientAreaUrl: CA_URL,
     reqKey,
+    support: new SupportLog(pool),
   });
   const core = new DeployCore({ drafts: new PgDraftStore(pool), releases: new PgReleaseStore(pool), blobs: new PgBlobStore(pool) });
   const clientsForNames = new PgClientsStore(pool, [CHATGPT]);
@@ -897,7 +900,7 @@ describe('automatic site setup', () => {
   it('a site the connector has never seen is registered on its first connection', async () => {
     expect(await sitesRepo.byAccount(77)).toBeUndefined();
     const before = await connectWith({ client_id: 30, account_id: 77, domain: 'nuevo.example', server_id: '6', scope: 'publish' });
-    expect(before.error).toBe('site not enabled for AI publishing yet'); // no setup → still refused
+    expect(before.error).toMatch(NOT_ENABLED); // no setup → still refused
 
     const { token } = await connectWith({ client_id: 30, account_id: 77, domain: 'nuevo.example', server_id: '6', scope: 'publish', site_setup: sealSetup(creds) });
     expect(token).toBeTruthy();
@@ -915,8 +918,50 @@ describe('automatic site setup', () => {
 
     const forged = sealSetup(creds).replace(/\.[^.]+$/, '.AAAAAAAAAAAAAAAAAAAAAA');
     const r = await connectWith({ client_id: 31, account_id: 78, domain: 'otro.example', server_id: '6', scope: 'publish', site_setup: forged });
-    expect(r.error).toBe('site not enabled for AI publishing yet');
+    expect(r.error).toMatch(NOT_ENABLED);
     expect(await sitesRepo.byAccount(78)).toBeUndefined();
+  });
+
+  it('a refusal is logged and kept in the support records under the reference the user sees', async () => {
+    const supportRow = async (ref: string) => {
+      for (let i = 0; i < 50; i++) {
+        const r = (await pool.query('SELECT kind, ok, error, service_id, client_id, app FROM support_events WHERE ref = $1', [ref])).rows[0];
+        if (r) return r;
+        await new Promise((ok) => setTimeout(ok, 20));
+      }
+      throw new Error(`no support record for ${ref}`);
+    };
+    const sealed = sealSetup({ ...creds, ftp_user: 'crsconnect@dos.example' });
+    const logs: string[] = [];
+    const orig = console.warn;
+    console.warn = (m: string) => logs.push(m);
+    let r: Awaited<ReturnType<typeof connectWith>>;
+    try {
+      // The first site arrives with its setup, the second without (its setup went to a consent the browser dropped).
+      r = await connectWith({
+        client_id: 32, account_id: 79, domain: 'dos.example', server_id: '6', scope: 'publish',
+        sites: [{ account_id: 79, domain: 'dos.example', kind: 'main', protected_dirs: [], site_setup: sealed }, { account_id: 79, domain: 'tres.example', kind: 'secondary', protected_dirs: [] }],
+      });
+    } finally {
+      console.warn = orig;
+    }
+    const ref = r.error!.match(NOT_ENABLED)![1]!;
+    const line = JSON.parse(logs.find((l) => l.includes('"connect_refused"'))!);
+    expect(line).toMatchObject({ event: 'connect_refused', reason: 'no_site_after_exchange', ref, sites_count: 2, site_setup: [true, false] });
+    expect(logs.join('\n')).not.toMatch(new RegExp(`${sealed}|tres\\.example|"79"|:79\\b`));
+    expect(await supportRow(ref)).toMatchObject({
+      kind: 'connect_refused', ok: false, service_id: 79, client_id: sharedClientId, app: 'ChatGPT',
+      error: 'no_site_after_exchange: tres.example; 2 site(s), site_setup 1/2',
+    });
+
+    // A code the client area doesn't recognise: sign-in text, same kind of record.
+    const { cookie, payload } = await startAuthorize(sharedClientId!);
+    const back = new URL((await get(`/oauth/callback?code=ca-gone&rid=${payload.rid}`, { cookie })).headers.get('location')!);
+    const m = back.searchParams.get('error_description')!.match(/^No pudimos verificar su ingreso\. .*referencia ([A-HJ-NP-Z2-9]{6})\. \/ Sign-in could not be verified\. .*reference \1\.$/);
+    expect(m).toBeTruthy();
+    expect((await supportRow(m![1]!)).error).toBe('exchange_failed; 0 site(s), site_setup 0/0');
+    // error_description stays printable ASCII (RFC 6749).
+    expect(back.searchParams.get('error_description')).toMatch(/^[\x20-\x21\x23-\x5B\x5D-\x7E]+$/);
   });
 
   it('lifecycle events: suspend pauses, unsuspend resumes, terminate revokes; only signed and fresh', async () => {
@@ -1150,7 +1195,7 @@ describe('several sites per hosting service and per connection', () => {
 
   it('refuses the whole connection when a chosen site is not set up', async () => {
     const r = await connectWith(multi([{ ...MAIN }, { account_id: 88, domain: 'nuevo2.example', kind: 'secondary', protected_dirs: [] }]));
-    expect(r.error).toBe('site not enabled for AI publishing yet');
+    expect(r.error).toMatch(NOT_ENABLED);
   });
 });
 

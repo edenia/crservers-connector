@@ -78,6 +78,8 @@ The connector publishes through a jailed FTP deploy user per site (per domain), 
 
 If setup fails, the client sees "we're activating this site, try again in a few minutes", and nothing is half-registered.
 
+The credentials reach the connector only inside that one-time code. If the code is lost (the browser drops the consent response, for example after a second click on Allow), the client area has the site set up but the connector doesn't. So before trusting a site it already set up, the client area asks the connector (`/client-area/api/site`) and, when the connector clearly has no such site, takes the deploy user over again with a new password and sends those credentials. If the connector can't answer, nothing is changed. A connection the connector still refuses is logged and kept as a support record (`connect_refused`), and the client sees a reference to give support.
+
 The client area also reports what happens to the hosting service, signed with the same shared key and with a timestamp and a single-use nonce. Each event applies to every site of the service:
 
 | Service event | Connector | Deploy user |

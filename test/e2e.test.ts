@@ -1112,6 +1112,40 @@ describe('edit_file removals', () => {
   });
 });
 
+describe('site guide (.htcrservers-guide.md)', () => {
+  it('the assistant saves a rule to the guide and every later draft returns it', async () => {
+    try {
+      const c = await mcpClient(await connect('publish'));
+      const before = await call(c, 'get_site_info');
+      expect(before.data.site_guide).toMatchObject({ path: '.htcrservers-guide.md', text: null });
+      expect(before.text).toContain('no guide yet');
+      const d = await call(c, 'start_changeset');
+      const w = await call(c, 'write_files', { changeset_id: d.data.changeset_id, files: [{ path: '.htcrservers-guide.md', content: '# Guía\n- Los eventos nuevos van arriba.' }] });
+      expect(w.data.results[0]).toMatchObject({ ok: true });
+      await call(c, 'preview_changeset', { changeset_id: d.data.changeset_id });
+      await call(c, 'publish', { changeset_id: d.data.changeset_id });
+      expect(siteFs.text('.htcrservers-guide.md')).toContain('eventos nuevos van arriba');
+
+      const next = await call(c, 'start_changeset');
+      expect(next.text).toContain('follow it for every change');
+      expect(next.data.site_guide.text).toBe('# Guía\n- Los eventos nuevos van arriba.');
+      expect(next.data.site_guide.updated_at).toBeNull(); // MemorySiteFs times aren't MLSD
+      const e = await call(c, 'edit_file', { changeset_id: next.data.changeset_id, path: '.htcrservers-guide.md', edits: [{ old_text: 'arriba.', new_text: 'arriba.\n- Tono cercano, de usted.' }] });
+      expect(e.text).toContain('1 cambio');
+      expect((await call(c, 'read_file', { path: '.htcrservers-guide.md', changeset_id: next.data.changeset_id })).data.text).toContain('Tono cercano');
+      const big = await call(c, 'write_files', { changeset_id: next.data.changeset_id, files: [{ path: '.htcrservers-guide.md', content: 'a'.repeat(17_000) }] });
+      expect(JSON.stringify(big.data)).toContain('16 KB');
+      const other = await call(c, 'write_files', { changeset_id: next.data.changeset_id, files: [{ path: '.htaccess', content: 'x' }] });
+      expect(JSON.stringify(other.data)).toContain('Hidden files');
+      await call(c, 'discard_changeset', { changeset_id: next.data.changeset_id });
+      expect((await call(c, 'get_site_info')).data.site_guide.text).toContain('eventos nuevos');
+      await c.close();
+    } finally {
+      siteFs.files.delete('.htcrservers-guide.md');
+    }
+  });
+});
+
 describe('sites published from GitHub (Static Deploy marker)', () => {
   it('get_site_info, start_changeset and publish say the next deploy replaces changes made here', async () => {
     await siteFs.write('.htcrservers-deploy.json', Buffer.from(JSON.stringify({ tool: 'crservers-static-deploy', repository: 'acme/uat-site', commit: 'abcdef1234567890', deployed_at: '2026-10-16T18:00:00Z' })));

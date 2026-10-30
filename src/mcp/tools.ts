@@ -4,8 +4,9 @@ import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
 import { DeployCore, DeployError } from '../deploy/core.js';
 import { ImportError, assertMediaMatches, fetchPublicUrl, type UrlFetcher } from '../deploy/fetchurl.js';
-import { MB, PathError, maxFileBytes, normalizeSitePath } from '../deploy/paths.js';
+import { MB, PathError, SITE_GUIDE_MAX_BYTES, maxFileBytes, normalizeSitePath } from '../deploy/paths.js';
 import { deployNote, deployedFrom, readDeployMarker } from '../deploy/deploymarker.js';
+import { readSiteGuide, siteGuideInfo, siteGuideNote } from '../deploy/siteguide.js';
 import type { AuditLog } from '../deploy/pgstores.js';
 import type { SiteFs } from '../deploy/sitefs.js';
 import type { PreviewService } from '../preview/preview.js';
@@ -191,14 +192,17 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
   registerTool('get_site_info', { title: 'Site info', description: 'Domain, live URL, permission and latest release.', inputSchema: { site: SITE }, annotations: RO }, (a) =>
     run({ site: a.site }, async ({ site, permission }, fs) => {
       const latest = (await deps.core.listReleases(site.id))[0];
-      const marker = await readDeployMarker(await fs());
-      return ok(`${site.domain} (${permission === 'publish' ? 'editar y publicar' : 'solo vista previa'})`, {
+      const f = await fs();
+      const marker = await readDeployMarker(f);
+      const guide = await readSiteGuide(f);
+      return ok(`${site.domain} (${permission === 'publish' ? 'editar y publicar' : 'solo vista previa'})\n\n${siteGuideNote(guide)}`, {
         domain: site.domain,
         type: site.kind,
         live_url: `https://${site.domain}/`,
         permission,
         ...(site.protectedDirs.length ? { other_site_folders: site.protectedDirs } : {}),
         ...(marker ? { deployed_from_github: deployedFrom(marker), note: deployNote(marker) } : {}),
+        site_guide: siteGuideInfo(guide),
         latest_release: latest ? { release: latest.number, when: latest.createdAt, cause: latest.cause } : null,
       });
     })(),
@@ -212,7 +216,8 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
         max_draft_files: 2000,
         max_per_write_call: { files: MAX_CALL_FILES, mb: MAX_CALL_BYTES / MB },
         allowed_types: 'html htm css js mjs json xml txt md svg png jpg jpeg webp gif avif ico woff woff2 ttf otf mp4 webm mp3 pdf webmanifest, /.well-known/*',
-        blocked: 'php and other server code, .htaccess, hidden files',
+        blocked: 'php and other server code, .htaccess, hidden files (except the site guide .htcrservers-guide.md)',
+        max_site_guide_kb: SITE_GUIDE_MAX_BYTES / 1024,
       }),
   );
 
@@ -316,11 +321,13 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo): McpServer {
         const d = await deps.core.startDraft(site.id, f, a.note);
         await deps.audit.add(site.id, clientId, 'start_changeset', { changeset_id: d.id });
         const marker = await readDeployMarker(f);
-        return ok(`Borrador creado para ${site.domain}. / Draft started for ${site.domain}.${marker ? `\n\n${deployNote(marker)}` : ''}`, {
+        const guide = await readSiteGuide(f);
+        return ok(`Borrador creado para ${site.domain}. / Draft started for ${site.domain}.${marker ? `\n\n${deployNote(marker)}` : ''}\n\n${siteGuideNote(guide)}`, {
           changeset_id: d.id,
           site: site.domain,
           expires_at: d.expiresAt,
           ...(marker ? { deployed_from_github: deployedFrom(marker), note: deployNote(marker) } : {}),
+          site_guide: siteGuideInfo(guide),
         });
       })(),
   );

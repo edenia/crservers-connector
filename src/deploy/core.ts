@@ -1,5 +1,5 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { MB, assertWritable, isSecretPath, isTextPath, maxFileBytes, normalizeSiteDir, normalizeSitePath } from './paths.js';
+import { MB, assertContentAllowed, assertWritable, isSecretPath, isTextPath, maxFileBytes, normalizeSiteDir, normalizeSitePath } from './paths.js';
 import { baseOf, dirOf, type SiteEntry, type SiteFs } from './sitefs.js';
 import type { BlobStore, Draft, DraftStore, Release, ReleaseFile, ReleaseStore } from './stores.js';
 
@@ -171,6 +171,7 @@ export class DeployCore {
       try {
         path = normalizeSitePath(f.path);
         assertWritable(path);
+        assertContentAllowed(path, f.content);
         if (f.content.length > maxFileBytes(path)) throw new DeployError('limit', `File too large (max ${maxFileBytes(path) / MB} MB)`);
         const prev = d.writes.get(path)?.length ?? 0;
         if (this.draftBytes(d) - prev + f.content.length > this.maxDraftBytes) throw new DeployError('limit', 'Draft size limit reached');

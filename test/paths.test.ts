@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { PathError, assertWritable, isSecretPath, normalizeSiteDir, normalizeSitePath } from '../src/deploy/paths.js';
+import { PathError, SITE_GUIDE, assertContentAllowed, assertWritable, isSecretPath, normalizeSiteDir, normalizeSitePath } from '../src/deploy/paths.js';
 
 describe('normalizeSitePath', () => {
   it.each([
@@ -44,6 +44,11 @@ describe('assertWritable', () => {
     'private/field-options.json',
     'credentials.json',
     'app/etc/local.xml',
+    'blog/.htcrservers-guide.md',
+    '.HTcrservers-guide.md',
+    '.htcrservers-guide.txt',
+    '.htcrservers-deploy.json',
+    '.htcrservers-components.json',
   ])('blocks %s', (p) => {
     expect(() => assertWritable(p)).toThrow(PathError);
   });
@@ -89,5 +94,23 @@ describe('isSecretPath', () => {
     'privacy.html',
     'private-tours.html',
     '.well-known/security.txt',
+    '.htcrservers-guide.md',
   ])('does not treat %s as secret', (p) => expect(isSecretPath(p)).toBe(false));
+});
+
+describe('site guide', () => {
+  it('is the one writable dot-file, only in the web root', () => {
+    expect(() => assertWritable(SITE_GUIDE)).not.toThrow();
+    expect(isSecretPath('blog/.htcrservers-guide.md')).toBe(true);
+    expect(isSecretPath('.htcrservers-deploy.json')).toBe(true);
+  });
+
+  it('takes UTF-8 text up to 16 KB', () => {
+    expect(() => assertContentAllowed(SITE_GUIDE, Buffer.from('# Guía\n- Eventos nuevos arriba. ñ ✓'))).not.toThrow();
+    expect(() => assertContentAllowed(SITE_GUIDE, Buffer.alloc(16 * 1024, 'a'))).not.toThrow();
+    expect(() => assertContentAllowed(SITE_GUIDE, Buffer.alloc(16 * 1024 + 1, 'a'))).toThrow(/16 KB/);
+    expect(() => assertContentAllowed(SITE_GUIDE, Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1]))).toThrow(/plain text/);
+    expect(() => assertContentAllowed(SITE_GUIDE, Buffer.from([0xff, 0xfe, 0x41]))).toThrow(/plain text/);
+    expect(() => assertContentAllowed('index.html', Buffer.alloc(16 * 1024 + 1, 0))).not.toThrow();
+  });
 });

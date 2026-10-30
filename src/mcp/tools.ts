@@ -624,7 +624,7 @@ type ListedTool = ToolConfig & { name: string };
  * Pinned by test/__snapshots__/protocol.tools.json.
  */
 function answerToolsListAsApproved(server: McpServer, tools: ListedTool[]): void {
-  const listing = tools.map((t) => ({
+  const listing = () => tools.map((t) => ({
     name: t.name,
     title: t.title,
     description: t.description,
@@ -634,5 +634,5 @@ function answerToolsListAsApproved(server: McpServer, tools: ListedTool[]): void
     _meta: t._meta,
   }));
   server.server.removeRequestHandler('tools/list');
-  server.server.setRequestHandler('tools/list', () => ({ tools: listing }) as ListToolsResult);
+  server.server.setRequestHandler('tools/list', () => ({ tools: listing() }) as ListToolsResult);
 }

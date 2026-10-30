@@ -6,6 +6,13 @@ export const fromB64url = (s: string): Buffer => Buffer.from(s, 'base64url');
 /** Random opaque token (tokens, codes, ids). 32 bytes by default. */
 export const randomToken = (bytes = 32): string => b64url(randomBytes(bytes));
 
+const REF_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789'; // no 0/O, 1/I/L: easy to read out over the phone
+
+/** Short reference id a customer can quote to support (tool errors, refused connections). */
+export function newRef(): string {
+  return Array.from(randomBytes(6), (b) => REF_ALPHABET[b % REF_ALPHABET.length]).join('');
+}
+
 /** Tokens and codes are stored only as SHA-256 hashes. */
 export const hashToken = (token: string): string => createHash('sha256').update(token).digest('hex');
 

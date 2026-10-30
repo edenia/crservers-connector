@@ -88,7 +88,7 @@ kubectl -n crservers-connector exec -i deploy/connector -- \
 
 ## Finding a customer's problem (support)
 
-Every tool error shown to the assistant ends with a reference, e.g. `(ref: K7Q2MD)`. Ask the customer for it (or for the hosting service id) and look it up in the support records, kept 30 days:
+Every tool error shown to the assistant ends with a reference, e.g. `(ref: K7Q2MD)`. So does a refused connection (the client consented in the client area but the app says it could not connect): its record has kind `connect_refused` and the reason in `error`, e.g. `no_site_after_exchange: example.com; 2 site(s), site_setup 1/2` (the client area sent no setup for a site the connector doesn't know; plugin 0.8.1+ re-runs the setup on the next try), `site_frozen` (service suspended), `exchange_failed` (the client area refused or couldn't be reached; see the `client_area_exchange_*` log lines) or `approve_scope`. Ask the customer for it (or for the hosting service id) and look it up in the support records, kept 30 days:
 
 ```sh
 # By reference

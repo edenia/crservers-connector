@@ -78,6 +78,8 @@ The connector publishes through a jailed FTP deploy user per site (per domain), 
 
 If setup fails, the client sees "we're activating this site, try again in a few minutes", and nothing is half-registered.
 
+The credentials reach the connector only inside that one-time code. If the code is lost (the browser drops the consent response, for example after a second click on Allow), the client area has the site set up but the connector doesn't. So before trusting a site it already set up, the client area asks the connector (`/client-area/api/site`) and, when the connector clearly has no such site, takes the deploy user over again with a new password and sends those credentials. If the connector can't answer, nothing is changed. A connection the connector still refuses is logged and kept as a support record (`connect_refused`), and the client sees a reference to give support.
+
 The client area also reports what happens to the hosting service, signed with the same shared key and with a timestamp and a single-use nonce. Each event applies to every site of the service:
 
 | Service event | Connector | Deploy user |
@@ -199,7 +201,7 @@ A daily job deletes what's past its period (`src/db/cleanup.ts`). The public pri
 | Expired tokens | Deleted a day after expiry |
 | Sign-in requests, one-time codes, owner sign-ins, event nonces | Deleted a day after expiry |
 | Approval requests | 90 days after the decision or expiry |
-| Support records (`support_events`: tool, result, error message, reference id, site, hosting service, OAuth client, app name) | 30 days |
+| Support records (`support_events`: tool, result, error message, reference id, site, hosting service, OAuth client, app name; also refused connections with the reason and domain) | 30 days |
 | Request logs (stdout) | Not collected by a central log system: they stay in the container log files on the node, rotated by the kubelet, and are lost when the pod is removed. (The cluster's Loki holds only another workload's logs.) IP addresses are anonymized and the lines carry no account, site or service ids (a failed tool call carries only its random reference id), so they hold no personal data |
 
 ## Operations

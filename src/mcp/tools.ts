@@ -1,8 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { SupportLog } from '../db/support.js';
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import { McpServer, type AuthInfo, type CallToolResult, type ListToolsResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { DeployCore, DeployError } from '../deploy/core.js';
 import { ImportError, assertMediaMatches, fetchPublicUrl, type UrlFetcher } from '../deploy/fetchurl.js';
@@ -210,8 +208,12 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
   // Claude's directory reads a tool's display name from annotations.title (MCP also has a top-level title):
   // copy it there for every tool.
   const register = server.registerTool.bind(server) as (n: string, c: unknown, f: unknown) => unknown;
-  const registerTool = ((name: string, config: { title?: string; annotations?: Record<string, unknown> }, cb: unknown) =>
-    register(name, { ...config, annotations: { ...config.annotations, title: config.title } }, cb)) as typeof server.registerTool;
+  const listed: ListedTool[] = [];
+  const registerTool = ((name: string, config: ToolConfig, cb: unknown) => {
+    const full = { ...config, annotations: { ...config.annotations, title: config.title } };
+    listed.push({ name, ...full });
+    return register(name, full, cb);
+  }) as typeof server.registerTool;
 
   const RO = { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false };
   const DRAFT = { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: false };
@@ -608,5 +610,29 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
       })(),
   );
 
+  answerToolsListAsApproved(server, listed);
   return server;
+}
+
+type ToolConfig = { title?: string; description?: string; inputSchema?: z.ZodRawShape; annotations?: Record<string, unknown>; _meta?: Record<string, unknown> };
+type ListedTool = ToolConfig & { name: string };
+
+/**
+ * tools/list exactly as SDK v1 listed it, which is what the Claude and ChatGPT directory reviews
+ * approved: draft-07 input schemas and execution.taskSupport "forbidden" (SDK v2 lists draft
+ * 2020-12 schemas and no execution). Only the listing: tools/call still validates with the SDK.
+ * Pinned by test/__snapshots__/protocol.tools.json.
+ */
+function answerToolsListAsApproved(server: McpServer, tools: ListedTool[]): void {
+  const listing = tools.map((t) => ({
+    name: t.name,
+    title: t.title,
+    description: t.description,
+    inputSchema: t.inputSchema ? z.toJSONSchema(z.object(t.inputSchema), { target: 'draft-7', io: 'input' }) : { type: 'object', properties: {} },
+    annotations: t.annotations,
+    execution: { taskSupport: 'forbidden' },
+    _meta: t._meta,
+  }));
+  server.server.removeRequestHandler('tools/list');
+  server.server.setRequestHandler('tools/list', () => ({ tools: listing }) as ListToolsResult);
 }

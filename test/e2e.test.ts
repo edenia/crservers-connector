@@ -19,6 +19,7 @@ import { PreviewService } from '../src/preview/preview.js';
 import { ApprovalService, approvalReasons } from '../src/approvals/approvals.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { Client as ClientV2, StreamableHTTPClientTransport as HttpV2 } from '@modelcontextprotocol/client';
 import { SiteRepo } from '../src/sites.js';
 import { skeletonFiles } from './fixtures/skeleton.js';
 
@@ -1273,6 +1274,46 @@ describe('support correlation (#56)', () => {
     expect(init!.site_ids.length).toBe(1);
     expect(bad).toMatchObject({ kind: 'tool_call', tool: 'list_files', ok: false, site_ids: init!.site_ids, service_id: expect.any(Number), client_id: init!.client_id });
     expect(rows.find((r) => r.tool === 'get_site_info')).toMatchObject({ ok: true, ref: null, service_id: bad!.service_id });
+  });
+});
+
+describe('2026-07-28 clients (ChatGPT: server/discover, no initialize)', () => {
+  it('connect, call tools and get support records with the same token and grant', async () => {
+    const token = await connect('publish');
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (m: string) => logs.push(m);
+    const since = new Date();
+    let failed = '';
+    let info: Structured = {};
+    let version: string | undefined;
+    try {
+      const c = new ClientV2({ name: 'openai-mcp', version: '1.0.0' }, { versionNegotiation: { mode: 'auto' } });
+      await c.connect(new HttpV2(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }));
+      version = c.getNegotiatedProtocolVersion();
+      info = (await c.callTool({ name: 'get_site_info', arguments: {} })).structuredContent as Structured;
+      failed = ((await c.callTool({ name: 'list_files', arguments: { path: 'no-existe-2026' } })).content as { text: string }[])[0]!.text;
+      await c.close();
+    } finally {
+      console.log = orig;
+    }
+    expect(version).toBe('2026-07-28');
+    expect(info).toMatchObject({ domain: 'uat.example' });
+    const ref = /\(ref: ([A-Z2-9]{6})\)/.exec(failed)?.[1];
+    expect(ref).toBeTruthy();
+
+    const events = logs.filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
+    expect(events.find((e) => e.event === 'mcp_initialize')).toMatchObject({ app: 'openai-mcp', app_version: '1.0.0', via: 'server/discover' });
+    expect(events.filter((e) => e.event === 'tool_call')).toEqual([expect.objectContaining({ tool: 'get_site_info', ok: true }), expect.objectContaining({ tool: 'list_files', ok: false, ref })]);
+
+    type Row = { kind: string; ref: string | null; app: string | null; service_id: number | null; site_ids: string[] };
+    let rows: Row[] = [];
+    for (let i = 0; i < 50 && rows.length < 3; i++) {
+      rows = (await pool.query<Row>('SELECT kind, ref, app, service_id, site_ids FROM support_events WHERE at >= $1 ORDER BY id', [since])).rows;
+      if (rows.length < 3) await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(rows.find((r) => r.kind === 'initialize')).toMatchObject({ app: 'openai-mcp' });
+    expect(rows.find((r) => r.ref === ref)).toMatchObject({ kind: 'tool_call', service_id: expect.any(Number), site_ids: [expect.any(String)] });
   });
 });
 

@@ -14,12 +14,13 @@ export const DEFAULT_REDIRECT_ALLOWLIST = [
   // token, as with Claude and ChatGPT.
   // VERIFIED by the vendor: Make.com MCP Client (https://apps.make.com/c5ZhYquO55e90hoCJ0rzt.md).
   'https://www.make.com/oauth/cb/mcp',
-  // UNVERIFIED (third-party sources), staging only until a real sign-in confirms each one; remove
-  // any that the staging logs show is not what the tool sends before the next production tag.
-  'https://lovable.dev/oauth/callback',
-  'https://www.perplexity.ai/rest/connections/oauth_callback',
-  'https://enterprise.perplexity.ai/rest/connections/oauth_callback',
-  'https://oauth.n8n.cloud/oauth2/callback',
+  // UNVERIFIED (third-party sources, see issue #51): left out until a real sign-in confirms each one.
+  // When a client needs one, uncomment it, connect from that tool on staging and check the
+  // `redirect_uri_refused` log line shows nothing else.
+  // 'https://lovable.dev/oauth/callback',
+  // 'https://www.perplexity.ai/rest/connections/oauth_callback',
+  // 'https://enterprise.perplexity.ai/rest/connections/oauth_callback',
+  // 'https://oauth.n8n.cloud/oauth2/callback',
 ];
 
 const b64urlKey = z

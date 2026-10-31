@@ -291,6 +291,14 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       ALTER TABLE support_events ADD CONSTRAINT support_events_kind_check CHECK (kind IN ('tool_call', 'initialize', 'connect_refused'));
     `,
   },
+  {
+    // Refused token refreshes (src/auth/provider.ts): why an app asked its user to sign in again.
+    id: '013_support_refresh_refused',
+    sql: `
+      ALTER TABLE support_events DROP CONSTRAINT support_events_kind_check;
+      ALTER TABLE support_events ADD CONSTRAINT support_events_kind_check CHECK (kind IN ('tool_call', 'initialize', 'connect_refused', 'refresh_refused'));
+    `,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

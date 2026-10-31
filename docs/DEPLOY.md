@@ -90,6 +90,8 @@ kubectl -n crservers-connector exec -i deploy/connector -- \
 
 Every tool error shown to the assistant ends with a reference, e.g. `(ref: K7Q2MD)`. So does a refused connection (the client consented in the client area but the app says it could not connect): its record has kind `connect_refused` and the reason in `error`, e.g. `no_site_after_exchange: example.com; 2 site(s), site_setup 1/2` (the client area sent no setup for a site the connector doesn't know; plugin 0.8.1+ re-runs the setup on the next try), `site_frozen` (service suspended), `exchange_failed` (the client area refused or couldn't be reached; see the `client_area_exchange_*` log lines) or `approve_scope`. Ask the customer for it (or for the hosting service id) and look it up in the support records, kept 30 days:
 
+When a client says their AI app keeps asking them to sign in again, look for `refresh_refused` records for their service (no reference is shown for these): the `error` says why, e.g. `revoked; grant 1a2b3c4d` or `reuse; grant 1a2b3c4d; rotated 2s earlier` (a reuse within seconds is most likely the app retrying, not theft).
+
 ```sh
 # By reference
 kubectl -n crservers-connector exec connector-postgres-0 -- psql -U connector -d connector -c \

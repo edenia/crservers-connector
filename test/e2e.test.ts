@@ -324,6 +324,44 @@ describe('authorization code flow', () => {
     expect((await siteInfo(((await r.json()) as { access_token: string }).access_token)).status).toBe(200);
   });
 
+  it('a refused refresh says why in the log and the support records, never the token', async () => {
+    const clientId = await register();
+    const otherId = await register();
+    const { cookie, verifier, payload } = await startAuthorize(clientId, 'site');
+    caResults.set('ca-refresh-why', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
+    const back = new URL((await get(`/oauth/callback?code=ca-refresh-why&rid=${payload.rid}`, { cookie })).headers.get('location')!);
+    const t = (await (await form('/token', { grant_type: 'authorization_code', code: back.searchParams.get('code')!, code_verifier: verifier, client_id: clientId })).json()) as { refresh_token: string };
+    const t2 = (await (await form('/token', { grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id: clientId })).json()) as { refresh_token: string };
+
+    const logs: string[] = [];
+    const orig = console.warn;
+    console.warn = (m: string) => logs.push(m);
+    try {
+      expect((await form('/token', { grant_type: 'refresh_token', refresh_token: 'never-issued', client_id: clientId })).status).toBe(400);
+      expect((await form('/token', { grant_type: 'refresh_token', refresh_token: t2.refresh_token, client_id: otherId })).status).toBe(400);
+      expect((await form('/token', { grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id: clientId })).status).toBe(400);
+      expect((await form('/token', { grant_type: 'refresh_token', refresh_token: t2.refresh_token, client_id: clientId })).status).toBe(400);
+    } finally {
+      console.warn = orig;
+    }
+    const lines = logs.filter((l) => l.includes('"refresh_refused"')).map((l) => JSON.parse(l) as { reason: string; grant?: string; replaced_s_ago?: number });
+    expect(lines.map((l) => l.reason)).toEqual(['unknown', 'other_client', 'reuse', 'revoked']);
+    expect(lines[0]!.grant).toBeUndefined();
+    expect(lines[2]!.grant).toMatch(/^[0-9a-f]{8}$/);
+    expect(lines[2]!.replaced_s_ago).toBeGreaterThanOrEqual(0);
+    expect(logs.join('\n')).not.toContain(t.refresh_token);
+    expect(logs.join('\n')).not.toContain(t2.refresh_token);
+
+    let rows: { error: string; service_id: number | null; ok: boolean }[] = [];
+    for (let i = 0; i < 50 && rows.length < 3; i++) {
+      rows = (await pool.query(`SELECT error, service_id, ok FROM support_events WHERE kind = 'refresh_refused' AND client_id = $1 ORDER BY id`, [clientId])).rows;
+      await new Promise((ok) => setTimeout(ok, 20));
+    }
+    expect(rows.map((r) => r.error.split(';')[0])).toEqual(['unknown', 'reuse', 'revoked']);
+    expect(rows[1]).toMatchObject({ service_id: 15, ok: false });
+    expect(rows[1]!.error).toMatch(/^reuse; grant [0-9a-f]{8}; rotated \d+s earlier$/);
+  });
+
   it('wrong PKCE verifier is refused', async () => {
     const clientId = await register();
     const { cookie, payload } = await startAuthorize(clientId);

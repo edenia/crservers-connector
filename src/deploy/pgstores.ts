@@ -33,6 +33,7 @@ export class PgDraftStore implements DraftStore {
       base: new Map(Object.entries(d.base as Record<string, string | null>)),
       startFingerprints: new Map(Object.entries(d.start_fingerprints as Record<string, string>)),
       earlyConflicts: new Set(d.early_conflicts as string[]),
+      skeletonDeletes: new Set(d.skeleton_deletes as string[]),
     };
   }
 
@@ -41,13 +42,14 @@ export class PgDraftStore implements DraftStore {
     try {
       await c.query('BEGIN');
       await c.query(
-        `INSERT INTO drafts (id, site_id, note, created_at, expires_at, version, previewed_version, base, start_fingerprints, early_conflicts)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        `INSERT INTO drafts (id, site_id, note, created_at, expires_at, version, previewed_version, base, start_fingerprints, early_conflicts, skeleton_deletes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
          ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version, previewed_version = EXCLUDED.previewed_version,
-           base = EXCLUDED.base, early_conflicts = EXCLUDED.early_conflicts`,
+           base = EXCLUDED.base, early_conflicts = EXCLUDED.early_conflicts, skeleton_deletes = EXCLUDED.skeleton_deletes`,
         [
           draft.id, draft.siteId, draft.note, draft.createdAt, draft.expiresAt, draft.version, draft.previewedVersion,
           JSON.stringify(Object.fromEntries(draft.base)), JSON.stringify(Object.fromEntries(draft.startFingerprints)), JSON.stringify([...draft.earlyConflicts]),
+          JSON.stringify([...draft.skeletonDeletes]),
         ],
       );
       // Only rewrite files whose content changed (drafts can hold large media).

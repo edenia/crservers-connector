@@ -1,6 +1,7 @@
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
-import { MB, assertWritable, isTextPath, maxFileBytes, normalizeSiteDir, normalizeSitePath } from './paths.js';
+import { MB, assertContentAllowed, assertWritable, isSecretPath, isTextPath, maxFileBytes, normalizeSiteDir, normalizeSitePath } from './paths.js';
 import { baseOf, dirOf, type SiteEntry, type SiteFs } from './sitefs.js';
+import { HOME_PAGES, isSkeletonPath, matchesSkeleton } from './skeleton.js';
 import type { BlobStore, Draft, DraftStore, Release, ReleaseFile, ReleaseStore } from './stores.js';
 
 /**
@@ -55,8 +56,10 @@ export interface ReadResult {
   path: string;
   size: number;
   hash: string;
-  /** Present for text files up to 1 MB. */
+  /** Present for text files up to 1 MB, unless the file may hold secrets. */
   text?: string;
+  /** The file may hold passwords or keys (paths.ts isSecretPath): content withheld. */
+  secret?: boolean;
 }
 
 export interface PreviewSummary {
@@ -64,6 +67,8 @@ export interface PreviewSummary {
   modified: string[];
   deleted: string[];
   conflicts: string[];
+  /** The hosting's placeholder files this draft removes (also in `deleted`); see skeleton.ts. */
+  placeholders: string[];
 }
 
 const READ_TEXT_LIMIT = 1 * MB;
@@ -120,6 +125,7 @@ export class DeployCore {
       base: new Map(),
       startFingerprints: new Map(live.map((e) => [e.path, fingerprint(e)])),
       earlyConflicts: new Set(),
+      skeletonDeletes: new Set(),
     };
     await this.drafts.put(draft);
     return draft;
@@ -170,6 +176,7 @@ export class DeployCore {
       try {
         path = normalizeSitePath(f.path);
         assertWritable(path);
+        assertContentAllowed(path, f.content);
         if (f.content.length > maxFileBytes(path)) throw new DeployError('limit', `File too large (max ${maxFileBytes(path) / MB} MB)`);
         const prev = d.writes.get(path)?.length ?? 0;
         if (this.draftBytes(d) - prev + f.content.length > this.maxDraftBytes) throw new DeployError('limit', 'Draft size limit reached');
@@ -177,6 +184,7 @@ export class DeployCore {
         await this.touch(d, fs, path, f.baseHash);
         d.writes.set(path, f.content);
         d.deletes.delete(path);
+        d.skeletonDeletes.delete(path);
         results.push({ path, ok: true });
       } catch (e) {
         results.push({ path, ok: false, error: (e as Error).message });
@@ -200,6 +208,7 @@ export class DeployCore {
         await this.touch(d, fs, path);
         d.writes.delete(path);
         if (existsLive) d.deletes.add(path);
+        d.skeletonDeletes.delete(path);
         results.push({ path, ok: true });
       } catch (e) {
         results.push({ path, ok: false, error: (e as Error).message });
@@ -225,13 +234,15 @@ export class DeployCore {
       data = await fs.read(path);
     }
     const result: ReadResult = { path, size: data.length, hash: sha256(data) };
-    if (isTextPath(path) && data.length <= READ_TEXT_LIMIT) result.text = data.toString('utf8');
+    if (isSecretPath(path)) result.secret = true;
+    else if (isTextPath(path) && data.length <= READ_TEXT_LIMIT) result.text = data.toString('utf8');
     return result;
   }
 
   async listFiles(siteId: string, fs: SiteFs, rawDir?: string, draftId?: string): Promise<SiteEntry[]> {
     const dir = normalizeSiteDir(rawDir);
-    const entries = new Map((await fs.list(dir)).map((e) => [e.path, e]));
+    const live = await this.listLiveDir(fs, dir);
+    const entries = new Map((live ?? []).map((e) => [e.path, e]));
     if (draftId) {
       const d = await this.getDraft(draftId, siteId);
       for (const p of d.deletes) entries.delete(p);
@@ -244,7 +255,36 @@ export class DeployCore {
         }
       }
     }
+    // A folder that exists neither live nor in the draft: say so instead of an internal error,
+    // so the assistant corrects the path rather than retrying it.
+    if (!live && !entries.size) throw new DeployError('not_found', 'Folder not found');
     return [...entries.values()].sort((a, b) => a.path.localeCompare(b.path));
+  }
+
+  /** Live entries of a folder, or null when the folder doesn't exist (FTP refuses the listing). */
+  private async listLiveDir(fs: SiteFs, dir: string): Promise<SiteEntry[] | null> {
+    let list: SiteEntry[];
+    try {
+      list = await fs.list(dir);
+    } catch (e) {
+      if (dir && !(await this.dirExists(fs, dir))) return null;
+      throw e;
+    }
+    if (!list.length && dir && !(await this.dirExists(fs, dir))) return null;
+    return list;
+  }
+
+  /** Decided from the nearest ancestor that lists; a failure that isn't a missing folder propagates. */
+  private async dirExists(fs: SiteFs, dir: string): Promise<boolean> {
+    const parent = dirOf(dir);
+    let list: SiteEntry[];
+    try {
+      list = await fs.list(parent);
+    } catch (e) {
+      if (parent && !(await this.dirExists(fs, parent))) return false;
+      throw e;
+    }
+    return list.some((e) => e.path === dir && e.type === 'dir');
   }
 
   // ---------------------------------------------------------------- preview / publish
@@ -273,13 +313,51 @@ export class DeployCore {
   /** Marks the current draft version as previewed. Scans and the preview site are added by callers. */
   async preview(draftId: string, siteId: string, fs: SiteFs): Promise<PreviewSummary> {
     const d = await this.getDraft(draftId, siteId);
+    if (await this.planSkeletonCleanup(d, fs)) d.version++;
     const { conflicts } = await this.conflicts(d, fs);
     const added: string[] = [];
     const modified: string[] = [];
     for (const p of d.writes.keys()) (d.base.get(p) === null ? added : modified).push(p);
     d.previewedVersion = d.version;
     await this.drafts.put(d);
-    return { added: added.sort(), modified: modified.sort(), deleted: [...d.deletes].sort(), conflicts };
+    return { added: added.sort(), modified: modified.sort(), deleted: [...d.deletes].sort(), conflicts, placeholders: [...d.skeletonDeletes].sort() };
+  }
+
+  /**
+   * A site that still holds only the hosting's placeholder files (skeleton.ts) gets them removed by the
+   * draft that brings its home page: they become deletions of the draft, so the preview lists them, the
+   * conflict check covers them and revert brings them back. Only exact matches, and never a path the
+   * user wrote or deleted in the draft. Redone on every preview; returns whether the plan changed.
+   */
+  private async planSkeletonCleanup(d: Draft, fs: SiteFs): Promise<boolean> {
+    const before = [...d.skeletonDeletes].sort().join('\n');
+    for (const p of d.skeletonDeletes) {
+      d.deletes.delete(p);
+      d.base.delete(p);
+      d.earlyConflicts.delete(p);
+    }
+    d.skeletonDeletes.clear();
+    for (const [p, hash] of await this.skeletonToRemove(d, fs)) {
+      await this.touch(d, fs, p, hash);
+      d.deletes.add(p);
+      d.skeletonDeletes.add(p);
+    }
+    return [...d.skeletonDeletes].sort().join('\n') !== before;
+  }
+
+  /** Placeholder files to remove (path → live hash), or none unless every visible live file is one. */
+  private async skeletonToRemove(d: Draft, fs: SiteFs): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    if (!HOME_PAGES.some((p) => d.writes.has(p))) return out;
+    // Hidden files (.htaccess, .well-known/) aren't site pages and AI Connect never deletes them.
+    const live = [...d.startFingerprints.keys()].filter((p) => !p.split('/').some((s) => s.startsWith('.')));
+    if (!live.length || !live.every(isSkeletonPath)) return out;
+    for (const p of live) {
+      const data = (await fs.stat(p)) ? await fs.read(p) : null;
+      if (!data || !matchesSkeleton(p, data)) return new Map();
+      if (!d.writes.has(p) && !d.deletes.has(p)) out.set(p, sha256(data));
+    }
+    return out;
   }
 
   /**

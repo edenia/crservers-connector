@@ -123,7 +123,9 @@ export class PreviewService {
     const query = req.originalUrl.includes('?') ? req.originalUrl.slice(req.originalUrl.indexOf('?')) : '';
 
     // Directory URLs: the draft's index.html / index.htm if it has one, else whatever the live site serves.
+    // A candidate the draft deletes falls through to the next one, as the server's directory index does.
     const candidates = rawPath.endsWith('/') ? [`${rawPath}index.html`, `${rawPath}index.htm`] : [rawPath];
+    let deleted = false;
     for (const c of candidates) {
       let path: string;
       try {
@@ -134,9 +136,13 @@ export class PreviewService {
       }
       const f = await this.draftFile(target.draftId, path);
       if (!f) continue;
-      if (f.deleted || !f.content) return void this.notFound(res, lang);
+      if (f.deleted || !f.content) {
+        deleted = true;
+        continue;
+      }
       return void this.send(req, res, target, prefix, lang, MIME[extOf(path)] ?? 'application/octet-stream', f.content, 200);
     }
+    if (deleted) return void this.notFound(res, lang);
     await this.proxyLive(req, res, target, prefix, lang, m[2] + query);
   }
 

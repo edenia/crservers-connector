@@ -7,6 +7,7 @@ import { loadConfig } from './config.js';
 import { fromB64url } from './crypto.js';
 import { migrate } from './db/migrate.js';
 import { scheduleCleanup } from './db/cleanup.js';
+import { SupportLog } from './db/support.js';
 import { DeployCore } from './deploy/core.js';
 import { FtpSiteFs } from './deploy/ftpfs.js';
 import { AuditLog, PgBlobStore, PgDraftStore, PgReleaseStore } from './deploy/pgstores.js';
@@ -24,6 +25,7 @@ const stopCleanup = scheduleCleanup(pool);
 const sites = new SiteRepo(pool, fromB64url(cfg.ENCRYPTION_KEY));
 const clients = new PgClientsStore(pool, cfg.redirectAllowlist);
 const clientArea = new ClientAreaClient(cfg.CLIENT_AREA_URL, cfg.CLIENT_AREA_API_ID, cfg.CLIENT_AREA_API_KEY);
+const support = new SupportLog(pool);
 const provider = new ConnectorOAuthProvider({
   pool,
   clients,
@@ -33,6 +35,7 @@ const provider = new ConnectorOAuthProvider({
   mcpUrl: cfg.mcpUrl,
   clientAreaUrl: cfg.CLIENT_AREA_URL,
   reqKey: fromB64url(cfg.REQ_KEY),
+  support,
 });
 
 const core = new DeployCore({ drafts: new PgDraftStore(pool), releases: new PgReleaseStore(pool), blobs: new PgBlobStore(pool) });
@@ -46,7 +49,7 @@ const approvals = new ApprovalService({
   clientAreaUrl: cfg.CLIENT_AREA_URL, reqKey: fromB64url(cfg.REQ_KEY), publicUrl: cfg.PUBLIC_URL,
 });
 const clientApi = { pool, sites, audit, appName, reqKey: fromB64url(cfg.REQ_KEY), removeSite: (grantId: string, siteId: string) => provider.removeSite(grantId, siteId) };
-const mcp = { core, sites, preview, approvals, audit, openFs, appName, layout };
+const mcp = { core, sites, preview, approvals, audit, openFs, appName, layout, support };
 
 const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp, preview, approvals, clientApi, openaiAppsChallenge: cfg.OPENAI_APPS_CHALLENGE, events: { pool, sites, reqKey: fromB64url(cfg.REQ_KEY) } });
 const server = app.listen(cfg.PORT, () => console.log(`crservers-connector listening on :${cfg.PORT} (${cfg.PUBLIC_URL})`));

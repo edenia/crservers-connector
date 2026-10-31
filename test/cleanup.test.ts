@@ -38,13 +38,15 @@ describe('retention cleanup', () => {
     const active = await grant(null);
     await pool.query(`INSERT INTO tokens (token_hash, kind, grant_id, client_id, expires_at) VALUES ('expired', 'access', $1, 'c', ${days(3)})`, [active]);
     await pool.query(`INSERT INTO audit_log (site_id, client_id, action, at) VALUES ($1, 'c', 'publish', ${days(400)}), ($1, 'c', 'publish', ${days(30)})`, [site]);
+    await pool.query(`INSERT INTO support_events (kind, tool, service_id, at) VALUES ('tool_call', 'list_files', 1, ${days(31)}), ('tool_call', 'list_files', 1, ${days(29)})`);
     const draft = (exp: string) => pool.query(`INSERT INTO drafts (id, site_id, created_at, expires_at, version, base, start_fingerprints, early_conflicts) VALUES ($1, $2, now(), ${exp}, 0, '{}', '{}', '[]')`, [randomUUID(), site]);
     await draft(days(2));
     await draft(`now() + interval '1 day'`);
     await pool.query(`INSERT INTO client_area_events (nonce, service_id, event, received_at) VALUES ('old', 1, 'suspend', ${days(2)}), ('new', 1, 'suspend', now())`);
 
     const counts = await cleanup(pool);
-    expect(counts).toMatchObject({ grants: 1, tokens_revoked: 1, tokens_expired: 1, audit_log: 1, drafts: 1, client_area_events: 1 });
+    expect(counts).toMatchObject({ grants: 1, tokens_revoked: 1, tokens_expired: 1, audit_log: 1, drafts: 1, client_area_events: 1, support_events: 1 });
+    expect((await pool.query('SELECT count(*)::int n FROM support_events')).rows[0].n).toBe(1);
 
     const grants = (await pool.query('SELECT id FROM grants ORDER BY id')).rows.map((r) => r.id).sort();
     expect(grants).toEqual([recentRevoked, active].sort());

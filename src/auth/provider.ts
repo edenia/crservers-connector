@@ -5,7 +5,8 @@ import type { AuthorizationParams, OAuthServerProvider } from '@modelcontextprot
 import type { AuthInfo } from '@modelcontextprotocol/sdk/server/auth/types.js';
 import type { OAuthClientInformationFull, OAuthTokenRevocationRequest, OAuthTokens } from '@modelcontextprotocol/sdk/shared/auth.js';
 import { InvalidGrantError, InvalidTargetError, InvalidTokenError } from '@modelcontextprotocol/sdk/server/auth/errors.js';
-import { hashToken, randomToken, safeEqual } from '../crypto.js';
+import { hashToken, newRef, randomToken, safeEqual } from '../crypto.js';
+import type { SupportLog } from '../db/support.js';
 import type { SiteRepo } from '../sites.js';
 import type { ClientAreaApi, ClientAreaSite } from './clientarea.js';
 import { isLoopbackRedirect, type PgClientsStore } from './clients.js';
@@ -35,7 +36,29 @@ export interface ProviderDeps {
   mcpUrl: string;
   clientAreaUrl: string;
   reqKey: Buffer;
+  /** Support records (src/db/support.ts): refused connections, with the reference shown to the user. */
+  support?: Pick<SupportLog, 'record'>;
 }
+
+/** Why a consented connection was refused (logged and kept in the support records). */
+export type RefusalReason = 'exchange_failed' | 'approve_scope' | 'no_site_after_exchange' | 'site_frozen';
+
+/**
+ * What the AI host shows when it can't connect. error_description must be printable ASCII
+ * (RFC 6749 §4.1.2.1), so the Spanish avoids accented letters.
+ */
+export function refusalText(reason: RefusalReason, ref: string): string {
+  const es = reason === 'exchange_failed' || reason === 'approve_scope' ? 'No pudimos verificar su ingreso' : 'No pudimos activar su sitio para la IA';
+  const en = reason === 'exchange_failed' || reason === 'approve_scope' ? 'Sign-in could not be verified' : 'Your site could not be enabled for AI publishing';
+  return `${es}. Intente conectar de nuevo; si sigue fallando, contacte a soporte con la referencia ${ref}. / ${en}. Try connecting again; if it keeps failing, contact support with reference ${ref}.`;
+}
+
+/**
+ * Why /token refused a refresh token: never seen (or from another environment), issued to another app,
+ * revoked (connection removed, app signed out or service terminated), already rotated (reuse: the
+ * whole connection is revoked) or past its 90-day idle expiry. Logged and kept in the support records.
+ */
+export type RefreshRefusal = 'unknown' | 'other_client' | 'revoked' | 'reuse' | 'expired';
 
 export class ConnectorOAuthProvider implements OAuthServerProvider {
   constructor(private readonly d: ProviderDeps) {}
@@ -104,15 +127,26 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       console.error(JSON.stringify({ t: new Date().toISOString(), event: 'client_area_exchange_failed', error: e.message.slice(0, 300) }));
       return null;
     });
-    // Codes issued for approving a publish never become connections.
-    if (!ca || ca.scope === 'approve') {
-      back.searchParams.set('error', 'access_denied');
-      back.searchParams.set('error_description', !ca ? 'sign-in could not be verified' : 'site not enabled for AI publishing yet');
-      return void res.redirect(302, back.href);
-    }
-
     // Older client areas send one site at the top level.
-    const chosen: ClientAreaSite[] = ca.sites ?? [{ account_id: ca.account_id, domain: ca.domain, ...(ca.site_setup ? { site_setup: ca.site_setup } : {}) }];
+    const chosen: ClientAreaSite[] = !ca ? [] : ca.sites ?? [{ account_id: ca.account_id, domain: ca.domain, ...(ca.site_setup ? { site_setup: ca.site_setup } : {}) }];
+    // One log line and one support record per refusal, with a reference the user can quote. Both say
+    // whether each chosen site carried its setup, never the setup itself. The log line carries no
+    // ids (docs/ARCHITECTURE.md, retention); the support record has the service and the domain.
+    const refuse = (reason: RefusalReason, domain?: string) => {
+      const ref = newRef();
+      const setup = chosen.map((c) => Boolean(c.site_setup));
+      console.warn(JSON.stringify({ t: new Date().toISOString(), event: 'connect_refused', reason, ref, sites_count: setup.length, site_setup: setup }));
+      const error = `${reason}${domain ? `: ${domain}` : ''}; ${setup.length} site(s), site_setup ${setup.filter(Boolean).length}/${setup.length}`;
+      void this.d.clients.displayName(ar.client_id).then((app) =>
+        this.d.support?.record({ kind: 'connect_refused', ref, ok: false, clientId: ar.client_id, serviceId: chosen[0]?.account_id, app, error }));
+      back.searchParams.set('error', 'access_denied');
+      back.searchParams.set('error_description', refusalText(reason, ref));
+      res.redirect(302, back.href);
+    };
+    if (!ca) return refuse('exchange_failed');
+    // Codes issued for approving a publish never become connections.
+    if (ca.scope === 'approve') return refuse('approve_scope');
+
     const siteIds: string[] = [];
     for (const c of chosen) {
       if (c.site_setup) {
@@ -126,11 +160,7 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
         }
       }
       const site = await this.d.sites.byAccount(c.account_id, c.domain);
-      if (!site || site.status !== 'active') {
-        back.searchParams.set('error', 'access_denied');
-        back.searchParams.set('error_description', 'site not enabled for AI publishing yet');
-        return void res.redirect(302, back.href);
-      }
+      if (!site || site.status !== 'active') return refuse(site ? 'site_frozen' : 'no_site_after_exchange', c.domain);
       if (c.kind) await this.d.sites.setLayout(site.id, c.kind, c.protected_dirs ?? []);
       if (!siteIds.includes(site.id)) siteIds.push(site.id);
     }
@@ -184,9 +214,21 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       [h, client.client_id],
     )).rows[0];
     if (!rotated) {
+      const known = (await this.d.pool.query(
+        `SELECT t.grant_id, t.client_id, t.revoked_at, t.replaced_at, t.expires_at <= now() AS expired,
+                extract(epoch FROM now() - t.replaced_at)::int AS replaced_s_ago, s.service_id
+         FROM tokens t JOIN grants g ON g.id = t.grant_id LEFT JOIN sites s ON s.id = g.site_id
+         WHERE t.token_hash = $1 AND t.kind = 'refresh'`,
+        [h],
+      )).rows[0];
+      const reason: RefreshRefusal = !known ? 'unknown'
+        : known.client_id !== client.client_id ? 'other_client'
+        : known.revoked_at ? 'revoked'
+        : known.replaced_at ? 'reuse'
+        : known.expired ? 'expired' : 'unknown';
       // Reuse of an already-rotated refresh token: assume theft, revoke the whole connection.
-      const reused = (await this.d.pool.query(`SELECT grant_id FROM tokens WHERE token_hash = $1 AND kind = 'refresh' AND replaced_at IS NOT NULL`, [h])).rows[0];
-      if (reused) await this.revokeGrant(reused.grant_id);
+      if (reason === 'reuse') await this.revokeGrant(known.grant_id);
+      this.logRefreshRefused(reason, client.client_id, known?.grant_id, known?.service_id ?? undefined, reason === 'reuse' ? known.replaced_s_ago : undefined);
       throw new InvalidGrantError('Invalid refresh token');
     }
     return this.issueTokens(rotated.grant_id, client.client_id);
@@ -230,6 +272,15 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     await this.d.pool.query('DELETE FROM grant_sites WHERE grant_id = $1 AND site_id = $2', [grantId, siteId]);
     const left = (await this.d.pool.query('SELECT count(*)::int AS n FROM grant_sites WHERE grant_id = $1', [grantId])).rows[0].n as number;
     if (left === 0) await this.revokeGrant(grantId);
+  }
+
+  /** One log line and one support record per refused refresh: ids and the reason, never the token. */
+  private logRefreshRefused(reason: RefreshRefusal, clientId: string, grantId?: string, serviceId?: number, replacedSecondsAgo?: number): void {
+    const grant = grantId?.slice(0, 8);
+    console.warn(JSON.stringify({ t: new Date().toISOString(), event: 'refresh_refused', reason, ...(grant ? { grant } : {}), ...(replacedSecondsAgo !== undefined ? { replaced_s_ago: replacedSecondsAgo } : {}) }));
+    const error = `${reason}${grant ? `; grant ${grant}` : ''}${replacedSecondsAgo !== undefined ? `; rotated ${replacedSecondsAgo}s earlier` : ''}`;
+    void this.d.clients.displayName(clientId).then((app) =>
+      this.d.support?.record({ kind: 'refresh_refused', ok: false, clientId, serviceId, app, error }));
   }
 
   async revokeGrant(grantId: string): Promise<void> {

@@ -12,13 +12,16 @@ import { verifyReq } from '../src/auth/req.js';
 import { migrate } from '../src/db/migrate.js';
 import { DeployCore } from '../src/deploy/core.js';
 import { AuditLog, PgBlobStore, PgDraftStore, PgReleaseStore } from '../src/deploy/pgstores.js';
+import { SupportLog } from '../src/db/support.js';
 import { MemorySiteFs } from '../src/deploy/sitefs.js';
 import { createApp } from '../src/http.js';
 import { PreviewService } from '../src/preview/preview.js';
 import { ApprovalService, approvalReasons } from '../src/approvals/approvals.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
+import { Client as ClientV2, StreamableHTTPClientTransport as HttpV2 } from '@modelcontextprotocol/client';
 import { SiteRepo } from '../src/sites.js';
+import { skeletonFiles } from './fixtures/skeleton.js';
 
 /**
  * Full authorization-code flow as an AI host drives it, against real Postgres and a fake
@@ -40,6 +43,8 @@ let provider: ConnectorOAuthProvider;
 const siteFs = new MemorySiteFs({ 'index.html': '<h1>Inicio</h1>', 'lotes.html': '<h1>Lotes</h1><p>$50.000</p>', 'assets/a.css': 'a{}' });
 siteFs.close = async () => undefined;
 const caResults = new Map<string, ClientAreaGrant | null>();
+/** What the AI host shows when a site couldn't be enabled: ES / EN, with a support reference. */
+const NOT_ENABLED = /^No pudimos activar su sitio para la IA\. .*referencia ([A-HJ-NP-Z2-9]{6})\. \/ Your site could not be enabled for AI publishing\. .*reference \1\.$/;
 const liveFetches: string[] = [];
 let sitesRepo: SiteRepo;
 /** The client area's current layout per hosting service; unset = what the connector already stores. */
@@ -76,6 +81,7 @@ beforeAll(async () => {
     mcpUrl,
     clientAreaUrl: CA_URL,
     reqKey,
+    support: new SupportLog(pool),
   });
   const core = new DeployCore({ drafts: new PgDraftStore(pool), releases: new PgReleaseStore(pool), blobs: new PgBlobStore(pool) });
   const clientsForNames = new PgClientsStore(pool, [CHATGPT]);
@@ -100,7 +106,7 @@ beforeAll(async () => {
     if (url.endsWith('/foto.png')) return { data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]), contentType: 'image/png', finalUrl: url };
     return { data: Buffer.from('<!doctype html><p>login</p>'), contentType: 'text/html', finalUrl: url };
   };
-  const mcp = { core, sites, preview, approvals, audit, openFs: async () => siteFs, appName, fetchUrl, layout };
+  const mcp = { core, sites, preview, approvals, audit, openFs: async () => siteFs, appName, fetchUrl, layout, support: new SupportLog(pool) };
   sitesRepo = sites;
   const clientApi = { pool, sites, audit, appName, reqKey, removeSite: (grantId: string, siteId: string) => provider.removeSite(grantId, siteId) };
   server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals, clientApi, openaiAppsChallenge: 'test-challenge-token', events: { pool, sites, reqKey }, registrationRateLimit: false }));
@@ -339,6 +345,44 @@ describe('authorization code flow', () => {
     expect((await siteInfo(((await r.json()) as { access_token: string }).access_token)).status).toBe(200);
   });
 
+  it('a refused refresh says why in the log and the support records, never the token', async () => {
+    const clientId = await register();
+    const otherId = await register();
+    const { cookie, verifier, payload } = await startAuthorize(clientId, 'site');
+    caResults.set('ca-refresh-why', { client_id: 12, account_id: 15, domain: 'uat.example', server_id: '6', scope: 'publish' });
+    const back = new URL((await get(`/oauth/callback?code=ca-refresh-why&rid=${payload.rid}`, { cookie })).headers.get('location')!);
+    const t = (await (await form('/token', { grant_type: 'authorization_code', code: back.searchParams.get('code')!, code_verifier: verifier, client_id: clientId })).json()) as { refresh_token: string };
+    const t2 = (await (await form('/token', { grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id: clientId })).json()) as { refresh_token: string };
+
+    const logs: string[] = [];
+    const orig = console.warn;
+    console.warn = (m: string) => logs.push(m);
+    try {
+      expect((await form('/token', { grant_type: 'refresh_token', refresh_token: 'never-issued', client_id: clientId })).status).toBe(400);
+      expect((await form('/token', { grant_type: 'refresh_token', refresh_token: t2.refresh_token, client_id: otherId })).status).toBe(400);
+      expect((await form('/token', { grant_type: 'refresh_token', refresh_token: t.refresh_token, client_id: clientId })).status).toBe(400);
+      expect((await form('/token', { grant_type: 'refresh_token', refresh_token: t2.refresh_token, client_id: clientId })).status).toBe(400);
+    } finally {
+      console.warn = orig;
+    }
+    const lines = logs.filter((l) => l.includes('"refresh_refused"')).map((l) => JSON.parse(l) as { reason: string; grant?: string; replaced_s_ago?: number });
+    expect(lines.map((l) => l.reason)).toEqual(['unknown', 'other_client', 'reuse', 'revoked']);
+    expect(lines[0]!.grant).toBeUndefined();
+    expect(lines[2]!.grant).toMatch(/^[0-9a-f]{8}$/);
+    expect(lines[2]!.replaced_s_ago).toBeGreaterThanOrEqual(0);
+    expect(logs.join('\n')).not.toContain(t.refresh_token);
+    expect(logs.join('\n')).not.toContain(t2.refresh_token);
+
+    let rows: { error: string; service_id: number | null; ok: boolean }[] = [];
+    for (let i = 0; i < 50 && rows.length < 3; i++) {
+      rows = (await pool.query(`SELECT error, service_id, ok FROM support_events WHERE kind = 'refresh_refused' AND client_id = $1 ORDER BY id`, [clientId])).rows;
+      await new Promise((ok) => setTimeout(ok, 20));
+    }
+    expect(rows.map((r) => r.error.split(';')[0])).toEqual(['unknown', 'reuse', 'revoked']);
+    expect(rows[1]).toMatchObject({ service_id: 15, ok: false });
+    expect(rows[1]!.error).toMatch(/^reuse; grant [0-9a-f]{8}; rotated \d+s earlier$/);
+  });
+
   it('wrong PKCE verifier is refused', async () => {
     const clientId = await register();
     const { cookie, payload } = await startAuthorize(clientId);
@@ -508,6 +552,76 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     expect((await call(c2, 'read_file', { path: 'p.html', changeset_id: '00000000-0000-0000-0000-000000000000' })).isError).toBe(true);
     await c2.close();
   });
+});
+
+describe('placeholder files of a new hosting account', () => {
+  /** Runs `fn` with the site holding only the skeleton, then puts the usual test files back. */
+  async function onFreshSite(fn: () => Promise<void>) {
+    const saved = new Map(siteFs.files);
+    siteFs.files.clear();
+    for (const [p, d] of Object.entries(skeletonFiles('uat.example'))) siteFs.put(p, d);
+    try {
+      await fn();
+    } finally {
+      siteFs.files.clear();
+      for (const [p, f] of saved) siteFs.files.set(p, f);
+    }
+  }
+
+  it('the first home page removes them; the preview says so; revert brings them back', () =>
+    onFreshSite(async () => {
+      const before = new Map([...siteFs.files].map(([p, f]) => [p, f.data]));
+      const c = await mcpClient(await connect('publish'));
+      const { data: draft } = await call(c, 'start_changeset');
+      await call(c, 'write_files', { changeset_id: draft.changeset_id, files: [{ path: 'index.html', content: '<h1>Café</h1>' }] });
+      const pv = await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+      expect(pv.data).toMatchObject({
+        modified: ['index.html'],
+        deleted: ['crservers-logo.svg', 'index.html.orig', 'robots.txt'],
+        placeholder_files_removed: ['crservers-logo.svg', 'index.html.orig', 'robots.txt'],
+        ready_to_publish: true,
+      });
+      expect(pv.text).toContain('placeholder files every new hosting account starts with');
+      expect(pv.text).not.toMatch(/siteworx|interworx/i);
+
+      const pub = await call(c, 'publish', { changeset_id: draft.changeset_id });
+      expect(pub.isError).toBe(false);
+      expect([...siteFs.files.keys()]).toEqual(['index.html']);
+
+      expect((await call(c, 'revert_release', { release: pub.data.release })).isError).toBe(false);
+      expect(new Map([...siteFs.files].map(([p, f]) => [p, f.data]))).toEqual(before);
+      await c.close();
+    }));
+
+  it('with index.htm as the new home page, the preview shows it rather than a missing index.html', () =>
+    onFreshSite(async () => {
+      const c = await mcpClient(await connect('publish'));
+      const { data: draft } = await call(c, 'start_changeset');
+      await call(c, 'write_files', { changeset_id: draft.changeset_id, files: [{ path: 'index.htm', content: '<h1>Café nuevo</h1>' }] });
+      const pv = await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+      expect(pv.data.placeholder_files_removed).toContain('index.html');
+      const home = await get(new URL(pv.data.preview_url).pathname);
+      expect(home.status).toBe(200);
+      expect(await home.text()).toContain('Café nuevo');
+      expect((await get(`${new URL(pv.data.preview_url).pathname}robots.txt`)).status).toBe(404);
+      await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
+      await c.close();
+    }));
+
+  it('a customised index.html is left alone, and so is the rest', () =>
+    onFreshSite(async () => {
+      siteFs.put('index.html.orig', '<h1>Mi copia</h1>');
+      const c = await mcpClient(await connect('publish'));
+      const { data: draft } = await call(c, 'start_changeset');
+      await call(c, 'write_files', { changeset_id: draft.changeset_id, files: [{ path: 'index.html', content: '<h1>Café</h1>' }] });
+      const pv = await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+      expect(pv.data).toMatchObject({ modified: ['index.html'], deleted: [] });
+      expect(pv.data.placeholder_files_removed).toBeUndefined();
+      expect((await call(c, 'publish', { changeset_id: draft.changeset_id })).isError).toBe(false);
+      expect([...siteFs.files.keys()].sort()).toEqual(['crservers-logo.svg', 'index.html', 'index.html.orig', 'robots.txt']);
+      expect(siteFs.text('index.html.orig')).toBe('<h1>Mi copia</h1>');
+      await c.close();
+    }));
 });
 
 describe('large files', () => {
@@ -846,7 +960,7 @@ describe('automatic site setup', () => {
   it('a site the connector has never seen is registered on its first connection', async () => {
     expect(await sitesRepo.byAccount(77)).toBeUndefined();
     const before = await connectWith({ client_id: 30, account_id: 77, domain: 'nuevo.example', server_id: '6', scope: 'publish' });
-    expect(before.error).toBe('site not enabled for AI publishing yet'); // no setup → still refused
+    expect(before.error).toMatch(NOT_ENABLED); // no setup → still refused
 
     const { token } = await connectWith({ client_id: 30, account_id: 77, domain: 'nuevo.example', server_id: '6', scope: 'publish', site_setup: sealSetup(creds) });
     expect(token).toBeTruthy();
@@ -864,8 +978,50 @@ describe('automatic site setup', () => {
 
     const forged = sealSetup(creds).replace(/\.[^.]+$/, '.AAAAAAAAAAAAAAAAAAAAAA');
     const r = await connectWith({ client_id: 31, account_id: 78, domain: 'otro.example', server_id: '6', scope: 'publish', site_setup: forged });
-    expect(r.error).toBe('site not enabled for AI publishing yet');
+    expect(r.error).toMatch(NOT_ENABLED);
     expect(await sitesRepo.byAccount(78)).toBeUndefined();
+  });
+
+  it('a refusal is logged and kept in the support records under the reference the user sees', async () => {
+    const supportRow = async (ref: string) => {
+      for (let i = 0; i < 50; i++) {
+        const r = (await pool.query('SELECT kind, ok, error, service_id, client_id, app FROM support_events WHERE ref = $1', [ref])).rows[0];
+        if (r) return r;
+        await new Promise((ok) => setTimeout(ok, 20));
+      }
+      throw new Error(`no support record for ${ref}`);
+    };
+    const sealed = sealSetup({ ...creds, ftp_user: 'crsconnect@dos.example' });
+    const logs: string[] = [];
+    const orig = console.warn;
+    console.warn = (m: string) => logs.push(m);
+    let r: Awaited<ReturnType<typeof connectWith>>;
+    try {
+      // The first site arrives with its setup, the second without (its setup went to a consent the browser dropped).
+      r = await connectWith({
+        client_id: 32, account_id: 79, domain: 'dos.example', server_id: '6', scope: 'publish',
+        sites: [{ account_id: 79, domain: 'dos.example', kind: 'main', protected_dirs: [], site_setup: sealed }, { account_id: 79, domain: 'tres.example', kind: 'secondary', protected_dirs: [] }],
+      });
+    } finally {
+      console.warn = orig;
+    }
+    const ref = r.error!.match(NOT_ENABLED)![1]!;
+    const line = JSON.parse(logs.find((l) => l.includes('"connect_refused"'))!);
+    expect(line).toMatchObject({ event: 'connect_refused', reason: 'no_site_after_exchange', ref, sites_count: 2, site_setup: [true, false] });
+    expect(logs.join('\n')).not.toMatch(new RegExp(`${sealed}|tres\\.example|"79"|:79\\b`));
+    expect(await supportRow(ref)).toMatchObject({
+      kind: 'connect_refused', ok: false, service_id: 79, client_id: sharedClientId, app: 'ChatGPT',
+      error: 'no_site_after_exchange: tres.example; 2 site(s), site_setup 1/2',
+    });
+
+    // A code the client area doesn't recognise: sign-in text, same kind of record.
+    const { cookie, payload } = await startAuthorize(sharedClientId!);
+    const back = new URL((await get(`/oauth/callback?code=ca-gone&rid=${payload.rid}`, { cookie })).headers.get('location')!);
+    const m = back.searchParams.get('error_description')!.match(/^No pudimos verificar su ingreso\. .*referencia ([A-HJ-NP-Z2-9]{6})\. \/ Sign-in could not be verified\. .*reference \1\.$/);
+    expect(m).toBeTruthy();
+    expect((await supportRow(m![1]!)).error).toBe('exchange_failed; 0 site(s), site_setup 0/0');
+    // error_description stays printable ASCII (RFC 6749).
+    expect(back.searchParams.get('error_description')).toMatch(/^[\x20-\x21\x23-\x5B\x5D-\x7E]+$/);
   });
 
   it('lifecycle events: suspend pauses, unsuspend resumes, terminate revokes; only signed and fresh', async () => {
@@ -1099,7 +1255,7 @@ describe('several sites per hosting service and per connection', () => {
 
   it('refuses the whole connection when a chosen site is not set up', async () => {
     const r = await connectWith(multi([{ ...MAIN }, { account_id: 88, domain: 'nuevo2.example', kind: 'secondary', protected_dirs: [] }]));
-    expect(r.error).toBe('site not enabled for AI publishing yet');
+    expect(r.error).toMatch(NOT_ENABLED);
   });
 });
 
@@ -1182,21 +1338,195 @@ describe('edit_file removals', () => {
   });
 });
 
-describe('sites published from GitHub (Static Deploy marker)', () => {
+describe('support correlation (#56)', () => {
+  it('shows a ref in errors; logs carry only the ref, support records carry site/service/client/app', async () => {
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (m: string) => logs.push(m);
+    let failed: Awaited<ReturnType<typeof call>>;
+    const since = new Date();
+    try {
+      const c = await mcpClient(await connect('publish'));
+      failed = await call(c, 'list_files', { path: 'no-existe-56' });
+      await call(c, 'get_site_info');
+      await c.close();
+    } finally {
+      console.log = orig;
+    }
+    const ref = /\(ref: ([A-Z2-9]{6})\)/.exec(failed.text)?.[1];
+    expect(ref).toBeTruthy();
+    expect(failed.text).toContain('Folder not found');
+
+    // Request logs: the ref, the app name, and no ids or paths.
+    const events = logs.filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
+    expect(events.find((e) => e.event === 'mcp_initialize')).toMatchObject({ app: expect.any(String) });
+    const calls = events.filter((e) => e.event === 'tool_call');
+    expect(calls).toEqual([expect.objectContaining({ tool: 'list_files', ok: false, ref }), expect.objectContaining({ tool: 'get_site_info', ok: true })]);
+    const text = JSON.stringify(events);
+    for (const banned of ['no-existe-56', '"site"', '"service"', '"client"', '"sites"']) expect(text).not.toContain(banned);
+
+    // Support records (written in the background): the link to site, service, client and app.
+    type Row = { kind: string; ref: string | null; tool: string | null; ok: boolean | null; site_ids: string[]; service_id: number | null; client_id: string | null; app: string | null };
+    let rows: Row[] = [];
+    for (let i = 0; i < 50 && rows.length < 3; i++) {
+      rows = (await pool.query<Row>('SELECT kind, ref, tool, ok, site_ids, service_id, client_id, app FROM support_events WHERE at >= $1 ORDER BY id', [since])).rows;
+      if (rows.length < 3) await new Promise((r) => setTimeout(r, 20));
+    }
+    const init = rows.find((r) => r.kind === 'initialize');
+    const bad = rows.find((r) => r.ref === ref);
+    expect(init).toMatchObject({ app: expect.any(String), client_id: expect.any(String) });
+    expect(init!.site_ids.length).toBe(1);
+    expect(bad).toMatchObject({ kind: 'tool_call', tool: 'list_files', ok: false, site_ids: init!.site_ids, service_id: expect.any(Number), client_id: init!.client_id });
+    expect(rows.find((r) => r.tool === 'get_site_info')).toMatchObject({ ok: true, ref: null, service_id: bad!.service_id });
+  });
+});
+
+describe('2026-07-28 clients (ChatGPT: server/discover, no initialize)', () => {
+  it('connect, call tools and get support records with the same token and grant', async () => {
+    const token = await connect('publish');
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (m: string) => logs.push(m);
+    const since = new Date();
+    let failed = '';
+    let info: Structured = {};
+    let version: string | undefined;
+    try {
+      const c = new ClientV2({ name: 'openai-mcp', version: '1.0.0' }, { versionNegotiation: { mode: 'auto' } });
+      await c.connect(new HttpV2(new URL(`${base}/mcp`), { requestInit: { headers: { authorization: `Bearer ${token}` } } }));
+      version = c.getNegotiatedProtocolVersion();
+      info = (await c.callTool({ name: 'get_site_info', arguments: {} })).structuredContent as Structured;
+      failed = ((await c.callTool({ name: 'list_files', arguments: { path: 'no-existe-2026' } })).content as { text: string }[])[0]!.text;
+      await c.close();
+    } finally {
+      console.log = orig;
+    }
+    expect(version).toBe('2026-07-28');
+    expect(info).toMatchObject({ domain: 'uat.example' });
+    const ref = /\(ref: ([A-Z2-9]{6})\)/.exec(failed)?.[1];
+    expect(ref).toBeTruthy();
+
+    const events = logs.filter((l) => l.startsWith('{')).map((l) => JSON.parse(l));
+    expect(events.find((e) => e.event === 'mcp_initialize')).toMatchObject({ app: 'openai-mcp', app_version: '1.0.0', via: 'server/discover' });
+    expect(events.filter((e) => e.event === 'tool_call')).toEqual([expect.objectContaining({ tool: 'get_site_info', ok: true }), expect.objectContaining({ tool: 'list_files', ok: false, ref })]);
+
+    type Row = { kind: string; ref: string | null; app: string | null; service_id: number | null; site_ids: string[] };
+    let rows: Row[] = [];
+    for (let i = 0; i < 50 && rows.length < 3; i++) {
+      rows = (await pool.query<Row>('SELECT kind, ref, app, service_id, site_ids FROM support_events WHERE at >= $1 ORDER BY id', [since])).rows;
+      if (rows.length < 3) await new Promise((r) => setTimeout(r, 20));
+    }
+    expect(rows.find((r) => r.kind === 'initialize')).toMatchObject({ app: 'openai-mcp' });
+    expect(rows.find((r) => r.ref === ref)).toMatchObject({ kind: 'tool_call', service_id: expect.any(Number), site_ids: [expect.any(String)] });
+  });
+});
+
+describe('site guide (.htcrservers-guide.md)', () => {
+  it('the assistant saves a rule to the guide and every later draft returns it', async () => {
+    try {
+      const c = await mcpClient(await connect('publish'));
+      const before = await call(c, 'get_site_info');
+      expect(before.data.site_guide).toMatchObject({ path: '.htcrservers-guide.md', text: null });
+      expect(before.text).toContain('no guide yet');
+      const d = await call(c, 'start_changeset');
+      const w = await call(c, 'write_files', { changeset_id: d.data.changeset_id, files: [{ path: '.htcrservers-guide.md', content: '# Guía\n- Los eventos nuevos van arriba.' }] });
+      expect(w.data.results[0]).toMatchObject({ ok: true });
+      await call(c, 'preview_changeset', { changeset_id: d.data.changeset_id });
+      await call(c, 'publish', { changeset_id: d.data.changeset_id });
+      expect(siteFs.text('.htcrservers-guide.md')).toContain('eventos nuevos van arriba');
+
+      const next = await call(c, 'start_changeset');
+      expect(next.text).toContain('follow it for every change');
+      expect(next.data.site_guide.text).toBe('# Guía\n- Los eventos nuevos van arriba.');
+      expect(next.data.site_guide.updated_at).toBeNull(); // MemorySiteFs times aren't MLSD
+      const e = await call(c, 'edit_file', { changeset_id: next.data.changeset_id, path: '.htcrservers-guide.md', edits: [{ old_text: 'arriba.', new_text: 'arriba.\n- Tono cercano, de usted.' }] });
+      expect(e.text).toContain('1 cambio');
+      expect((await call(c, 'read_file', { path: '.htcrservers-guide.md', changeset_id: next.data.changeset_id })).data.text).toContain('Tono cercano');
+      const big = await call(c, 'write_files', { changeset_id: next.data.changeset_id, files: [{ path: '.htcrservers-guide.md', content: 'a'.repeat(17_000) }] });
+      expect(JSON.stringify(big.data)).toContain('16 KB');
+      const other = await call(c, 'write_files', { changeset_id: next.data.changeset_id, files: [{ path: '.htaccess', content: 'x' }] });
+      expect(JSON.stringify(other.data)).toContain('Hidden files');
+      await call(c, 'discard_changeset', { changeset_id: next.data.changeset_id });
+      expect((await call(c, 'get_site_info')).data.site_guide.text).toContain('eventos nuevos');
+      await c.close();
+    } finally {
+      siteFs.files.delete('.htcrservers-guide.md');
+    }
+  });
+});
+
+describe('managed contact form', () => {
+  it('get_site_info and start_changeset tell the AI how to call /contact.php when the form is installed', async () => {
+    const marker = { tool: 'crservers-components', components: { contact_form: { version: '2.1.0', endpoint: '/contact.php' } } };
+    await siteFs.write('.htcrservers-components.json', Buffer.from(JSON.stringify(marker)));
+    await siteFs.write('contact.php', Buffer.from('<?php'));
+    try {
+      const c = await mcpClient(await connect('publish'));
+      const info = await call(c, 'get_site_info');
+      expect(info.text).toContain('contact form');
+      expect(info.data.managed_components.contact_form).toMatchObject({ enabled: true, version: '2.1.0', endpoint: '/contact.php', method: 'POST' });
+      const d = await call(c, 'start_changeset');
+      expect(d.data.managed_components.contact_form.guidance).toContain('posts to /contact.php');
+      const w = await call(c, 'write_files', { changeset_id: d.data.changeset_id, files: [{ path: 'contact.php', content: '<?php mail();' }] });
+      expect(JSON.stringify(w.data)).toContain('installs and maintains');
+      await call(c, 'discard_changeset', { changeset_id: d.data.changeset_id });
+      await c.close();
+    } finally {
+      siteFs.files.delete('.htcrservers-components.json');
+      siteFs.files.delete('contact.php');
+    }
+  });
+
+  it('a site without the form gets no managed_components', async () => {
+    const c = await mcpClient(await connect('publish'));
+    expect((await call(c, 'get_site_info')).data).not.toHaveProperty('managed_components');
+    await c.close();
+  });
+});
+
+describe('sites published from GitHub (CR Servers Deploy marker)', () => {
   it('get_site_info, start_changeset and publish say the next deploy replaces changes made here', async () => {
     await siteFs.write('.htcrservers-deploy.json', Buffer.from(JSON.stringify({ tool: 'crservers-static-deploy', repository: 'acme/uat-site', commit: 'abcdef1234567890', deployed_at: '2026-10-16T18:00:00Z' })));
     try {
       const c = await mcpClient(await connect('publish'));
       const info = await call(c, 'get_site_info');
-      expect(info.data.deployed_from_github).toMatchObject({ repository: 'acme/uat-site', commit: 'abcdef123456' });
-      expect(info.data.note).toContain('next deploy');
+      expect(info.data.deployed_from_github).toMatchObject({ repository: 'acme/uat-site', repository_url: 'https://github.com/acme/uat-site', commit: 'abcdef123456' });
+      expect(info.data.deployed_from_github.guidance).toContain('next deploy');
+      expect(info.data.deployed_from_github).not.toHaveProperty('build');
       const d = await call(c, 'start_changeset');
-      expect(d.text).toContain('acme/uat-site');
+      expect(d.text).toContain('https://github.com/acme/uat-site');
+      expect(d.data.deployed_from_github.guidance).toContain('in the repository instead');
       await call(c, 'discard_changeset', { changeset_id: d.data.changeset_id });
       await c.close();
     } finally {
       siteFs.files.delete('.htcrservers-deploy.json');
     }
+  });
+
+  it('a Next.js export gets the compiled-site wording; a malformed marker is ignored', async () => {
+    await siteFs.write('.htcrservers-deploy.json', Buffer.from(JSON.stringify({ tool: 'crservers-static-deploy', repository: 'acme/v0-site', ref: 'refs/heads/main', commit: 'abcdef1234567890' })));
+    siteFs.put('_next/static/chunks/main-1a2b.js', 'x');
+    try {
+      const c = await mcpClient(await connect('publish'));
+      const info = await call(c, 'get_site_info');
+      expect(info.data.deployed_from_github).toMatchObject({ build: 'nextjs-export', deploy_branch: 'main' });
+      expect(info.data.deployed_from_github.guidance).toContain('compiled Next.js static export');
+      await siteFs.write('.htcrservers-deploy.json', Buffer.from('{"tool":"crservers-static-deploy","repository":"acme/v0-site"'));
+      expect((await call(c, 'get_site_info')).data).not.toHaveProperty('deployed_from_github');
+      await c.close();
+    } finally {
+      siteFs.files.delete('.htcrservers-deploy.json');
+      siteFs.files.delete('_next/static/chunks/main-1a2b.js');
+    }
+  });
+
+  it('a site without the marker gets no deploy guidance', async () => {
+    const c = await mcpClient(await connect('publish'));
+    expect((await call(c, 'get_site_info')).data).not.toHaveProperty('deployed_from_github');
+    const d = await call(c, 'start_changeset');
+    expect(d.text).not.toContain('GitHub');
+    await call(c, 'discard_changeset', { changeset_id: d.data.changeset_id });
+    await c.close();
   });
 });
 
@@ -1213,5 +1543,27 @@ describe('backup files in the web root', () => {
     siteFs.files.delete('index.html.orig');
     expect((await call(c, 'list_files', {})).data.note).toBeUndefined();
     await c.close();
+  });
+});
+
+describe('files that may hold secrets', () => {
+  it('read_file and edit_file never return the content of files that may hold secrets', async () => {
+    siteFs.put('config.php', Buffer.from("<?php $db_pass = 'hunter2';"));
+    try {
+      const c = await mcpClient(await connect('publish'));
+      const read = await call(c, 'read_file', { path: 'config.php' });
+      expect(read.isError).toBe(false);
+      expect(read.data).toMatchObject({ path: 'config.php', secret: true });
+      expect(read.data.text).toBeUndefined();
+      expect(JSON.stringify(read)).not.toContain('hunter2');
+      const { data: draft } = await call(c, 'start_changeset', {});
+      const edit = await call(c, 'edit_file', { changeset_id: draft.changeset_id, path: 'config.php', edits: [{ old_text: 'hunter2', new_text: 'x' }] });
+      expect(edit.isError).toBe(true);
+      expect(JSON.stringify(edit)).not.toContain('hunter2');
+      await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
+      await c.close();
+    } finally {
+      siteFs.files.delete('config.php');
+    }
   });
 });

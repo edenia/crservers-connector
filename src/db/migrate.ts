@@ -253,6 +253,52 @@ const MIGRATIONS: { id: string; sql: string }[] = [
     id: '009_layout_checked_at',
     sql: `ALTER TABLE sites ADD COLUMN layout_checked_at timestamptz;`,
   },
+  {
+    // Support records (src/db/support.ts): ids and outcomes of tool calls and session starts, kept 30 days.
+    // No foreign keys: a record must outlive nothing and block nothing.
+    id: '010_support_events',
+    sql: `
+      CREATE TABLE support_events (
+        id          bigserial PRIMARY KEY,
+        at          timestamptz NOT NULL DEFAULT now(),
+        kind        text NOT NULL CHECK (kind IN ('tool_call', 'initialize')),
+        ref         text,
+        tool        text,
+        ok          boolean,
+        error       text,
+        site_ids    uuid[] NOT NULL DEFAULT '{}',
+        service_id  integer,
+        client_id   text,
+        app         text,
+        app_version text
+      );
+      CREATE INDEX support_events_ref ON support_events (ref) WHERE ref IS NOT NULL;
+      CREATE INDEX support_events_service_at ON support_events (service_id, at);
+      CREATE INDEX support_events_at ON support_events (at);
+    `,
+  },
+  {
+    // Hosting placeholder files a draft's preview added to its deletions (src/deploy/skeleton.ts).
+    id: '011_draft_skeleton_deletes',
+    sql: `ALTER TABLE drafts ADD COLUMN skeleton_deletes jsonb NOT NULL DEFAULT '[]';`,
+  },
+  {
+    // Refused connections (src/auth/provider.ts) are support records too: today's evidence of a
+    // refused first connection was only in the logs of a pod that has since restarted.
+    id: '012_support_connect_refused',
+    sql: `
+      ALTER TABLE support_events DROP CONSTRAINT support_events_kind_check;
+      ALTER TABLE support_events ADD CONSTRAINT support_events_kind_check CHECK (kind IN ('tool_call', 'initialize', 'connect_refused'));
+    `,
+  },
+  {
+    // Refused token refreshes (src/auth/provider.ts): why an app asked its user to sign in again.
+    id: '013_support_refresh_refused',
+    sql: `
+      ALTER TABLE support_events DROP CONSTRAINT support_events_kind_check;
+      ALTER TABLE support_events ADD CONSTRAINT support_events_kind_check CHECK (kind IN ('tool_call', 'initialize', 'connect_refused', 'refresh_refused'));
+    `,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

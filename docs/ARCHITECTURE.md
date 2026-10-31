@@ -168,6 +168,7 @@ When it's on, `publish` doesn't go live. It returns an approval link for the AI 
 - Files the user wrote or deleted in the draft are theirs: the cleanup leaves them alone.
 - It's recomputed on every preview, so a draft that no longer brings a home page drops it again. The conflict check covers these files like any other.
 - Empty folders (`cgi-bin/`, the fonts folder) stay; the connector only deletes files.
+- The list has to follow the hosting skeleton. When the skeleton changes (edenia/crservers-interworx, `customizations/new-site-page/v2`), add the new page's fingerprint and every new file's hash, and keep the old ones for accounts created before. Last synced with the 2026-10-28 skeleton (social preview image and favicons).
 
 **Importing files.** Photos and other media rarely fit through a chat as base64, so `import_from_url` downloads one from a public link straight into the draft. Typical sources are an image the AI generated, a stock photo, or a Google Drive or Dropbox share link, which is converted to a direct download.
 - Media only: images, video, audio, fonts and PDF.

@@ -3,7 +3,7 @@ import { DeployCore } from '../src/deploy/core.js';
 import { matchesSkeleton } from '../src/deploy/skeleton.js';
 import { MemorySiteFs } from '../src/deploy/sitefs.js';
 import { MemoryBlobStore, MemoryDraftStore, MemoryReleaseStore } from '../src/deploy/stores.js';
-import { placeholderPage as page, skeletonFixture as fixture, skeletonFiles } from './fixtures/skeleton.js';
+import { fullSkeletonFiles, placeholderPage as page, skeletonFixture as fixture, skeletonFiles } from './fixtures/skeleton.js';
 
 const SITE = 'site-1';
 const b = (s: string) => Buffer.from(s);
@@ -26,6 +26,14 @@ describe('matching placeholder files', () => {
     expect(matchesSkeleton('robots.txt', fixture('robots.txt'))).toBe(true);
     expect(matchesSkeleton('robots.txt', b('User-agent: *\nDisallow:\n'))).toBe(false);
     expect(matchesSkeleton('assets/robots.txt', fixture('robots.txt'))).toBe(false);
+  });
+
+  it('matches the page from before the 2026-10-28 skeleton update, also as its .bak copy', () => {
+    const before = (domain: string) => Buffer.from(fixture('index-20261024.html').toString('latin1').split('::DOMAIN::').join(domain), 'latin1');
+    expect(matchesSkeleton('index.html', before('p2p-coffee.com'))).toBe(true);
+    expect(matchesSkeleton('index.html.bak-20261028-og', fixture('index-20261024.html'))).toBe(true);
+    expect(matchesSkeleton('index.html.bak-20261028-og', page('p2p-coffee.com'))).toBe(true);
+    expect(matchesSkeleton('index.html.bak-20261029', page('p2p-coffee.com'))).toBe(false);
   });
 });
 
@@ -82,6 +90,17 @@ describe('first publish on a fresh site', () => {
     await core.preview(d.id, SITE, fs);
     fs.put('robots.txt', 'User-agent: *\n');
     await expect(core.publish(d.id, SITE, fs, 'test')).rejects.toMatchObject({ code: 'conflict', paths: ['robots.txt'] });
+  });
+});
+
+describe('the current skeleton', () => {
+  it('a new account gets nothing but placeholders: all of it goes with the first home page', async () => {
+    fs = new MemorySiteFs(fullSkeletonFiles('prosperacoffee.com'));
+    const skeleton = [...fs.files.keys()].filter((p) => p !== 'index.html').sort();
+    const { pv } = await previewAndPublish((id) => core.writeFiles(id, SITE, fs, [{ path: 'index.html', content: b('<h1>Café</h1>') }]));
+    expect(skeleton).toHaveLength(14);
+    expect(pv.placeholders).toEqual(skeleton);
+    expect([...fs.files.keys()]).toEqual(['index.html']);
   });
 });
 

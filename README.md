@@ -11,7 +11,7 @@
 
 *Your website, managed by your AI assistant. [English below.](#english)*
 
-> **Estado: piloto.** Estamos probando AI Connect con un grupo pequeño de clientes. Todavía no está disponible para todas las cuentas.
+> **Disponible** para todos los clientes con hospedaje compartido activo, incluido en su plan.
 
 ---
 
@@ -42,8 +42,10 @@ Usted puede quitarle el acceso al asistente cuando quiera.
 
 ### Asistentes compatibles
 
-- **Claude** (conector personalizado): funcionando en el piloto.
-- **ChatGPT**: en preparación.
+- **ChatGPT**: [CR Servers AI Connect en los plugins de ChatGPT](https://chatgpt.com/plugins/plugin_asdk_app_6ad01a3cf5c881918f920a67bdfc7664).
+- **Claude**: [CR Servers AI Connect en el directorio de conectores de Claude](https://claude.ai/directory/crservers-ai-connect).
+
+Guía paso a paso: [Conectar ChatGPT o Claude](https://crservers.com/es/soporte/hospedaje/ai-connect-chatgpt-claude).
 
 ### ¿Preguntas?
 
@@ -55,7 +57,7 @@ Escríbanos desde [crservers.com](https://crservers.com). Le atiende nuestro equ
 
 **CR Servers AI Connect** lets a hosting client's own AI assistant (Claude, ChatGPT) publish and maintain their website safely. It's a remote [MCP](https://modelcontextprotocol.io) server with its own OAuth 2.1 authorization server. Sign-in happens in the CR Servers client area, so no password ever reaches the AI.
 
-> **Status: pilot.** Not yet generally available to all CR Servers accounts.
+> **Status: generally available** to every CR Servers shared hosting client. Listed as a [ChatGPT plugin](https://chatgpt.com/plugins/plugin_asdk_app_6ad01a3cf5c881918f920a67bdfc7664) and in [Claude's connector directory](https://claude.ai/directory/crservers-ai-connect).
 
 ### How it works
 

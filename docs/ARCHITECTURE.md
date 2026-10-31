@@ -112,6 +112,7 @@ The client area checks that the signed-in client owns the service, then calls th
 
 - Access tokens last 1 hour and are bound to this server's MCP URL. Refresh tokens rotate on every use.
 - **Reusing an old refresh token revokes the whole connection.** It's treated as theft.
+- Every refused refresh is logged (`refresh_refused`) and kept as a support record with its reason: `unknown` (never issued here, e.g. a token from staging), `other_client`, `revoked` (connection removed, app signed out, service terminated), `reuse` (with how many seconds earlier it was rotated, to tell a retry from theft) or `expired` (90 days idle). The app then asks its user to sign in again.
 - Tokens and codes are stored only as SHA-256 hashes.
 - Only known AI-host callback URLs are accepted (exact match), whether the client registers dynamically (DCR) or identifies itself with a Client ID Metadata Document. Metadata documents are only fetched from the AI hosts' own domains.
 

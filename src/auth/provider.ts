@@ -53,6 +53,13 @@ export function refusalText(reason: RefusalReason, ref: string): string {
   return `${es}. Intente conectar de nuevo; si sigue fallando, contacte a soporte con la referencia ${ref}. / ${en}. Try connecting again; if it keeps failing, contact support with reference ${ref}.`;
 }
 
+/**
+ * Why /token refused a refresh token: never seen (or from another environment), issued to another app,
+ * revoked (connection removed, app signed out or service terminated), already rotated (reuse: the
+ * whole connection is revoked) or past its 90-day idle expiry. Logged and kept in the support records.
+ */
+export type RefreshRefusal = 'unknown' | 'other_client' | 'revoked' | 'reuse' | 'expired';
+
 export class ConnectorOAuthProvider implements OAuthServerProvider {
   constructor(private readonly d: ProviderDeps) {}
 
@@ -207,9 +214,21 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
       [h, client.client_id],
     )).rows[0];
     if (!rotated) {
+      const known = (await this.d.pool.query(
+        `SELECT t.grant_id, t.client_id, t.revoked_at, t.replaced_at, t.expires_at <= now() AS expired,
+                extract(epoch FROM now() - t.replaced_at)::int AS replaced_s_ago, s.service_id
+         FROM tokens t JOIN grants g ON g.id = t.grant_id LEFT JOIN sites s ON s.id = g.site_id
+         WHERE t.token_hash = $1 AND t.kind = 'refresh'`,
+        [h],
+      )).rows[0];
+      const reason: RefreshRefusal = !known ? 'unknown'
+        : known.client_id !== client.client_id ? 'other_client'
+        : known.revoked_at ? 'revoked'
+        : known.replaced_at ? 'reuse'
+        : known.expired ? 'expired' : 'unknown';
       // Reuse of an already-rotated refresh token: assume theft, revoke the whole connection.
-      const reused = (await this.d.pool.query(`SELECT grant_id FROM tokens WHERE token_hash = $1 AND kind = 'refresh' AND replaced_at IS NOT NULL`, [h])).rows[0];
-      if (reused) await this.revokeGrant(reused.grant_id);
+      if (reason === 'reuse') await this.revokeGrant(known.grant_id);
+      this.logRefreshRefused(reason, client.client_id, known?.grant_id, known?.service_id ?? undefined, reason === 'reuse' ? known.replaced_s_ago : undefined);
       throw new InvalidGrantError('Invalid refresh token');
     }
     return this.issueTokens(rotated.grant_id, client.client_id);
@@ -253,6 +272,15 @@ export class ConnectorOAuthProvider implements OAuthServerProvider {
     await this.d.pool.query('DELETE FROM grant_sites WHERE grant_id = $1 AND site_id = $2', [grantId, siteId]);
     const left = (await this.d.pool.query('SELECT count(*)::int AS n FROM grant_sites WHERE grant_id = $1', [grantId])).rows[0].n as number;
     if (left === 0) await this.revokeGrant(grantId);
+  }
+
+  /** One log line and one support record per refused refresh: ids and the reason, never the token. */
+  private logRefreshRefused(reason: RefreshRefusal, clientId: string, grantId?: string, serviceId?: number, replacedSecondsAgo?: number): void {
+    const grant = grantId?.slice(0, 8);
+    console.warn(JSON.stringify({ t: new Date().toISOString(), event: 'refresh_refused', reason, ...(grant ? { grant } : {}), ...(replacedSecondsAgo !== undefined ? { replaced_s_ago: replacedSecondsAgo } : {}) }));
+    const error = `${reason}${grant ? `; grant ${grant}` : ''}${replacedSecondsAgo !== undefined ? `; rotated ${replacedSecondsAgo}s earlier` : ''}`;
+    void this.d.clients.displayName(clientId).then((app) =>
+      this.d.support?.record({ kind: 'refresh_refused', ok: false, clientId, serviceId, app, error }));
   }
 
   async revokeGrant(grantId: string): Promise<void> {

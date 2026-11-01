@@ -1037,10 +1037,14 @@ describe('automatic site setup', () => {
     expect((await sitesRepo.byAccount(77))!.status).toBe('frozen');
     const c = await mcpClient(token!);
     expect((await call(c, 'get_site_info')).text).toContain('pausada');
+    expect((await call(c, 'get_site_info')).text).toContain('https://crservers.com/es/contacto');
     expect((await connectWith({ client_id: 30, account_id: 77, domain: 'nuevo.example', server_id: '6', scope: 'publish' })).error).toBeTruthy();
 
     await sendEvent(77, 'unsuspend');
-    expect((await call(c, 'get_site_info')).data).toMatchObject({ domain: 'nuevo.example' });
+    expect((await call(c, 'get_site_info')).data).toMatchObject({
+      domain: 'nuevo.example',
+      help: { articles: { manage_connections: { es: 'https://crservers.com/es/soporte/hospedaje/ai-connect-gestionar' } } },
+    });
 
     await sendEvent(77, 'terminate');
     expect((await siteInfo(token!)).status).toBe(401);

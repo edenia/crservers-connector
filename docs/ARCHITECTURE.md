@@ -68,6 +68,10 @@ Each site can keep a **site guide**, `.htcrservers-guide.md` in the web root: th
 
 The guide is the one piece of site content the AI treats as the owner's preferences rather than plain data. Only the owner (FTP, file manager) and their own assistant can write it, and every path, type and approval rule still applies, so a hostile guide can at most produce changes the owner would see in the preview. On a site published from GitHub, CR Servers Deploy never uploads or deletes the guide (it only deletes files it uploaded), but the repository's own instructions are the place for that site's conventions.
 
+### Help links
+
+`get_site_info` always includes `help`: a `guidance` sentence and `articles`, the public knowledge-base links (Spanish and English) for AI Connect, connecting the assistant, managing connections, email accounts, DNS records, SSL, backups, deploying from GitHub, `.htaccess` and redirects, the file manager, website errors and the contact page. The AI gives the user the matching link instead of guessing when something is out of its reach. `deployed_from_github` carries the deploy-from-GitHub article, a refused `.htaccess` or server-code file (`.php`, `.py`, …) adds the matching article to the refusal, and a paused site's refusal adds the contact page. Tool output only: no tool description or `INSTRUCTIONS` change, so the directory listings need no new review. The links live in `src/mcp/help.ts`; when a knowledge-base article is renamed, update them there.
+
 ## Automatic site setup
 
 The connector publishes through a jailed FTP deploy user per site (per domain), one that can reach only that site's folder. The main domain's user is `crsconnect@<main domain>`; the service's other domains get `crsconnect<8 hex>@<main domain>`. Nobody creates these by hand:

@@ -9,6 +9,7 @@ import { isSkeletonPath } from '../deploy/skeleton.js';
 import { deployNote, deployedFrom, readDeployMarker } from '../deploy/deploymarker.js';
 import { contactFormInfo, readContactForm } from '../deploy/components.js';
 import { readSiteGuide, siteGuideInfo, siteGuideNote } from '../deploy/siteguide.js';
+import { help, helpInfo, pathHelp } from './help.js';
 import type { AuditLog } from '../deploy/pgstores.js';
 import type { SiteFs } from '../deploy/sitefs.js';
 import type { PreviewService } from '../preview/preview.js';
@@ -160,7 +161,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
       if ('error' in r) return fail(r.error, { sites: sites.map((s) => s.domain) });
       site = r.site;
     }
-    if (site.status !== 'active') return fail(`La publicación está pausada para ${site.domain}; contacte a soporte. / Publishing is paused for ${site.domain}; contact support.`);
+    if (site.status !== 'active') return fail(`La publicación está pausada para ${site.domain}; contacte a soporte (${help('contact_support').es}). / Publishing is paused for ${site.domain}; contact support (${help('contact_support').en}).`);
     // Picks up subdomains created since the client connected (falls back to the stored layout).
     const current = deps.layout ? await deps.layout.fresh(site, false) : site;
     trace.siteId = current.id;
@@ -174,7 +175,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
       const failRef = (message: string, data?: Record<string, unknown>) => fail(`${message} (ref: ${ref})`, data);
       if (e instanceof DeployError) return failRef(`${ERROR_TEXT[e.code] ?? e.code} ${e.message}`, e.paths.length ? { paths: e.paths } : {});
       if (e instanceof LayoutUnavailable) return failRef(LAYOUT_UNAVAILABLE);
-      if (e instanceof PathError) return failRef(`${e.message}: ${e.path}`);
+      if (e instanceof PathError) return failRef(`${e.message}: ${e.path}.${pathHelp(e.path)}`);
       if (e instanceof ImportError) return failRef(`No se pudo traer el archivo: ${e.message} / Could not import the file: ${e.message}`);
       console.error(`tool error ref=${ref}`, e);
       return failRef('Error interno; intente de nuevo. / Internal error; please retry.');
@@ -237,10 +238,11 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
         live_url: `https://${site.domain}/`,
         permission,
         ...(site.protectedDirs.length ? { other_site_folders: site.protectedDirs } : {}),
-        ...(marker ? { deployed_from_github: deployedFrom(marker) } : {}),
+        ...(marker ? { deployed_from_github: { ...deployedFrom(marker), help: help('deploy_from_github') } } : {}),
         ...(form ? { managed_components: { contact_form: contactFormInfo(form) } } : {}),
         site_guide: siteGuideInfo(guide),
         latest_release: latest ? { release: latest.number, when: latest.createdAt, cause: latest.cause } : null,
+        help: helpInfo(),
       });
     })(),
   );

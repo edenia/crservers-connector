@@ -65,7 +65,7 @@ export const COMPONENT_PATHS = ['contact.php', 'vendor/', 'composer.json', 'comp
 const COMPONENT_REFUSAL =
   'This file belongs to a component CR Servers installs and maintains (the contact form uses contact.php, vendor/ and composer files). Don\'t write or replace it: to add a contact form, write the HTML form in a page and post to /contact.php (see managed_components in get_site_info)';
 
-function isComponentPath(path: string): boolean {
+export function isComponentPath(path: string): boolean {
   return COMPONENT_PATHS.some((p) => (p.endsWith('/') ? path.startsWith(p) : path === p));
 }
 

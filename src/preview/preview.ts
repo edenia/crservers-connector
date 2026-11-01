@@ -204,8 +204,10 @@ export function rewriteUrl(url: string, domain: string, prefix: string): string 
   return null;
 }
 
-const ATTR_RE = /(\s(?:href|src|action|poster|data|formaction|background)\s*=\s*)(["'])(.*?)\2/gi;
-const SRCSET_RE = /(\ssrcset\s*=\s*)(["'])(.*?)\2/gi;
+// [\s\S] rather than .: formatters split long attribute values (often srcset) over several lines.
+// [\s\S], not `.`: formatters split long values (srcset above all) over several lines.
+const ATTR_RE = /(\s(?:href|src|action|poster|data|formaction|background)\s*=\s*)(["'])([\s\S]*?)\2/gi;
+const SRCSET_RE = /(\ssrcset\s*=\s*)(["'])([\s\S]*?)\2/gi;
 
 export function rewriteHtml(html: string, domain: string, prefix: string, lang: Lang): string {
   let out = html.replace(ATTR_RE, (all, pre: string, q: string, url: string) => {

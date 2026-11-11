@@ -195,6 +195,7 @@ Either way the server applies the rules of `import_from_url`: media only, first 
 - it stops working after an hour, after 60 files, when the draft is published, discarded or expires, or when the connection that asked for it loses access to the site;
 - no SVG (it can carry script): the assistant writes SVG files with `write_files`;
 - only its SHA-256 hash is stored, and request logs carry neither the token nor the file name;
+- the token is letters and digits only: a chat that turns the address into a link drops a trailing `_` or `-`, and the owner would open a link that does not exist;
 - the page loads nothing from other origins (`default-src 'none'`, a per-response script nonce) and can't be framed.
 
 `get_upload_link` also returns `uploaded`: the files that arrived through this draft's links and are still in the draft. The assistant calls it again to learn the paths.

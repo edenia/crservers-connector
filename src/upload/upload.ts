@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import express, { type Request, type Response } from 'express';
 import type { Pool } from 'pg';
-import { hashToken, randomToken } from '../crypto.js';
+import { hashToken } from '../crypto.js';
 import type { DeployCore } from '../deploy/core.js';
 import { IMPORTABLE_EXT, ImportError, assertMediaMatches } from '../deploy/fetchurl.js';
 import { MB, PathError, extOf, maxFileBytes, normalizeSiteDir, normalizeSitePath } from '../deploy/paths.js';
@@ -113,7 +113,9 @@ export class UploadService {
    * expires, or the connection that asked for it loses access to the site.
    */
   async createLink(draftId: string, siteId: string, grantId: string, folder: string, widths: number[] = []): Promise<{ url: string; expiresAt: Date }> {
-    const token = randomToken(24);
+    // Letters and digits only. A token that ends in "_" or "-" loses that last character when a chat
+    // turns the address into a link, and the owner then opens a link that does not exist.
+    const token = randomBytes(24).toString('hex');
     const r = await this.d.pool.query(
       `INSERT INTO upload_links (token_hash, draft_id, site_id, grant_id, folder, widths, expires_at)
        SELECT $1, d.id, d.site_id, $7, $4, $5, LEAST(d.expires_at, now() + make_interval(secs => $6)) FROM drafts d WHERE d.id = $2 AND d.site_id = $3

@@ -16,12 +16,12 @@ The portal keeps a draft only in the browser tab (**"Draft saved in this tab"**)
 
 ### 1. Connection
 
-- **Server URL:** `https://connect.crservers.com/mcp`. The portal should show *CR Servers · 17 tools · 0 resources · Auth OAuth*.
+- **Server URL:** `https://connect.crservers.com/mcp`. The portal should show *CR Servers · 18 tools · 0 resources · Auth OAuth*.
 - **Users connect to different URLs:** leave unchecked.
 
 ### 2. Tools
 
-17 tools, each with `annotations.title` (since v0.7.2) and explicit hints. Ignore the "Reference the target API docs" suggestion: it's for tools that send raw API requests, and ours call fixed operations.
+18 tools (17 at the time of the review; `get_upload_link` was added in November 2026), each with `annotations.title` (since v0.7.2) and explicit hints. Ignore the "Reference the target API docs" suggestion: it's for tools that send raw API requests, and ours call fixed operations.
 
 ### 3. Listing
 
@@ -110,7 +110,7 @@ Steps:
 
 Notes:
 - The tests only change test.crservers.com. Please undo publishes so the heading returns to "Welcome to our test site".
-- add_attachments receives files attached in ChatGPT (OpenAI file parameters). In Claude, images come in with import_from_url.
+- add_attachments receives files attached in ChatGPT (OpenAI file parameters). In Claude, a photo attached in the chat comes in through get_upload_link (Claude sends it from its code sandbox, or the user opens the link and picks it), and an image at a public link with import_from_url.
 - Preview links are private and expire after one hour.
 - Docs: https://crservers.com/support/hosting/ai-connect
 ```

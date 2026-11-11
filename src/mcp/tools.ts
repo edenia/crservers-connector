@@ -4,7 +4,7 @@ import { McpServer, type AuthInfo, type CallToolResult, type ListToolsResult } f
 import { z } from 'zod';
 import { DeployCore, DeployError } from '../deploy/core.js';
 import { ImportError, assertMediaMatches, fetchPublicUrl, type UrlFetcher } from '../deploy/fetchurl.js';
-import { MB, PathError, SITE_GUIDE_MAX_BYTES, maxFileBytes, normalizeSitePath } from '../deploy/paths.js';
+import { MB, PathError, SITE_GUIDE_MAX_BYTES, maxFileBytes, normalizeSiteDir, normalizeSitePath } from '../deploy/paths.js';
 import { isSkeletonPath } from '../deploy/skeleton.js';
 import { deployNote, deployedFrom, readDeployMarker } from '../deploy/deploymarker.js';
 import { contactFormInfo, readContactForm } from '../deploy/components.js';
@@ -13,6 +13,7 @@ import { help, helpInfo, pathHelp } from './help.js';
 import type { AuditLog } from '../deploy/pgstores.js';
 import type { SiteFs } from '../deploy/sitefs.js';
 import type { PreviewService } from '../preview/preview.js';
+import { UPLOAD_MAX_FILES, WIDTH_MAX, WIDTH_MIN, type UploadService } from '../upload/upload.js';
 import { approvalReasons, type ApprovalService } from '../approvals/approvals.js';
 import { LayoutUnavailable, type LayoutSync } from '../auth/layout.js';
 import type { Site, SiteRepo } from '../sites.js';
@@ -33,6 +34,8 @@ export interface McpDeps {
   appName?: (clientId: string) => Promise<string>;
   /** Creates preview links for drafts. */
   preview?: Pick<PreviewService, 'createLink'>;
+  /** Upload links: files from the user's device (or the AI's sandbox) into a draft. */
+  uploads?: Pick<UploadService, 'createLink' | 'uploaded'>;
   /** Big changes go to the site owner's approval link instead of going live from the chat. */
   approvals?: Pick<ApprovalService, 'request' | 'latest' | 'siteOfDraft'>;
   /** Downloads for import_from_url (public addresses only). Tests inject a fake. */
@@ -136,6 +139,12 @@ const ERROR_TEXT: Record<string, string> = {
   invalid: 'Solicitud no válida. / Invalid request.',
   other_site: 'Estos archivos están en carpetas de otro sitio de este hosting (un subdominio); quítelos del borrador o use ese sitio. / These files are in folders that belong to another site in this hosting account (a subdomain); remove them from the draft or use that site.',
 };
+
+const NO_ATTACHMENT =
+  'No se pudo leer el archivo adjunto: esta app no entrega al conector los archivos del chat. Use get_upload_link (usted mismo sube el archivo desde su entorno de código, o el usuario lo sube desde su dispositivo), o import_from_url si el archivo está en un enlace público. / Could not read the attached file: this app does not hand chat attachments to the connector. Use get_upload_link instead (upload the file yourself from your code sandbox, or let the user upload it from their device), or import_from_url when the file is at a public link.';
+
+const UPLOAD_HOW_TO =
+  'How to use it. (1) The user attached the file in this chat and you can run code with network access: upload it yourself, one request per file: curl -sS -T foto.jpg "<upload_url>/foto.jpg". The answer is JSON with the path it got in the draft. Resize photos first (2000 px on the long side at most, JPEG quality around 78) and use short lowercase names; a file with the same name as an existing one replaces it in the draft. If the request is blocked (no network access to this host), use (2). (2) Give the user upload_url: they open it, pick the files on their phone or computer, and tell you when they are done; the page resizes photos for them and never replaces an existing file (it adds -2 to the name). Then call get_upload_link again, or list_files with changeset_id, to see the paths, and continue with the edit and preview_changeset. Never ask the user to open the link when you can upload the file yourself.';
 
 const LAYOUT_UNAVAILABLE = 'No se pudo confirmar la estructura del hosting; no se cambió nada. Intente de nuevo en unos minutos. / Could not confirm the hosting layout; nothing changed. Try again in a few minutes.';
 
@@ -452,13 +461,61 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
         const added: { path: string; size: number }[] = [];
         for (const [i, file] of a.files.entries()) {
           const path = normalizeSitePath(a.paths[i]!);
-          const dl = await (deps.fetchUrl ?? fetchPublicUrl)(file.download_url, maxFileBytes(path));
+          let dl;
+          try {
+            dl = await (deps.fetchUrl ?? fetchPublicUrl)(file.download_url, maxFileBytes(path));
+          } catch (e) {
+            // Apps that don't hand chat attachments to connectors (Claude) send no usable download link.
+            if (!(e instanceof ImportError) && !(e instanceof TypeError)) throw e;
+            return fail(NO_ATTACHMENT, { path, added, use_instead: ['get_upload_link', 'import_from_url'] });
+          }
           assertMediaMatches(path, dl.data);
           const [res] = await deps.core.writeFiles(a.changeset_id, site.id, await fs(), [{ path, content: dl.data }]);
           if (!res?.ok) return fail(res?.error ?? 'No se pudo agregar. / Could not stage the file.', { path, added });
           added.push({ path, size: dl.data.length });
         }
         return ok(`${added.length} archivo(s) agregados al borrador. / ${added.length} file(s) staged.`, { added });
+      })(),
+  );
+
+  registerTool(
+    'get_upload_link',
+    {
+      title: 'Get upload link',
+      description:
+        `Returns upload_url, a private link (valid 1 hour) that takes photos and other media files into one folder of the draft stored on CR Servers (the live site doesn't change until publish). Use it when the user wants to add files from their device, or attached them in the chat and add_attachments can't read them. Two ways to use it: if you have the file in a code sandbox with network access, upload it yourself with one HTTP PUT per file to upload_url + "/" + file name, the file as the request body (curl -T foto.jpg "<upload_url>/foto.jpg"); otherwise give upload_url to the user, who opens it and picks the files on their phone or computer. Call it again to see what has arrived (uploaded). Media only (images, video, audio, fonts, PDF); each file must really be the type its name says.`,
+      inputSchema: {
+        changeset_id: z.string(),
+        folder: z.string().max(200).default('img').describe('Folder in the site where the files go, e.g. "img" or "img/proyectos". To replace an existing photo, use its folder and upload a file with the same name.'),
+        widths: z.array(z.number().int().min(WIDTH_MIN).max(WIDTH_MAX)).max(4).optional().describe('Extra copies the upload page makes of each photo for srcset, by width in pixels, e.g. [800, 1200, 1600] gives foto-800.jpg and so on. Only for files the user uploads on the page.'),
+      },
+      annotations: { ...DRAFT, openWorldHint: false },
+    },
+    (a) =>
+      run({ changesetId: a.changeset_id }, async ({ site }) => {
+        if (!deps.uploads) return fail('No disponible. / Not available.');
+        const folder = normalizeSiteDir(a.folder);
+        const refused = folder ? refuseOtherSites(site, [folder]) : null;
+        if (refused) return refused;
+        if (folder.split('/').some((seg) => seg.startsWith('.'))) throw new PathError('Hidden folders are not allowed', folder);
+        const widths = [...new Set(a.widths ?? [])].sort((x, y) => x - y);
+        const link = await deps.uploads.createLink(a.changeset_id, site.id, folder, widths);
+        const uploaded = await deps.uploads.uploaded(a.changeset_id);
+        const where = folder ? `${folder}/` : 'la raíz del sitio / the site root';
+        return ok(
+          `Enlace para subir archivos a ${where} del borrador: ${link.url}\n${uploaded.length} archivo(s) recibidos hasta ahora. / Upload link for the draft: ${link.url} (${uploaded.length} file(s) received so far).\n\n${UPLOAD_HOW_TO}`,
+          {
+            upload_url: link.url,
+            expires_at: link.expiresAt,
+            folder,
+            uploaded,
+            max_files: UPLOAD_MAX_FILES,
+            how_to_upload: {
+              from_your_sandbox: `curl -sS -T foto.jpg "${link.url}/foto.jpg"`,
+              by_the_user: link.url,
+            },
+          },
+        );
       })(),
   );
 

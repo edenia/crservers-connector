@@ -17,6 +17,8 @@ import { MemorySiteFs } from '../src/deploy/sitefs.js';
 import { createApp } from '../src/http.js';
 import { PreviewService } from '../src/preview/preview.js';
 import { ApprovalService, approvalReasons } from '../src/approvals/approvals.js';
+import { ImportError } from '../src/deploy/fetchurl.js';
+import { UploadService } from '../src/upload/upload.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { Client as ClientV2, StreamableHTTPClientTransport as HttpV2 } from '@modelcontextprotocol/client';
@@ -103,13 +105,16 @@ beforeAll(async () => {
   const layout = new LayoutSync(sites, clientArea, 0);
   const approvals = new ApprovalService({ pool, sites, core, audit, openFs: async () => siteFs, preview, clientArea, clientAreaUrl: CA_URL, reqKey, publicUrl: base, appName, layout });
   const fetchUrl = async (url: string) => {
+    // What a chat attachment looks like from an app that can't hand files to connectors.
+    if (!/^https?:/.test(url)) throw new ImportError('Only http(s) links are supported');
     if (url.endsWith('/foto.png')) return { data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]), contentType: 'image/png', finalUrl: url };
     return { data: Buffer.from('<!doctype html><p>login</p>'), contentType: 'text/html', finalUrl: url };
   };
-  const mcp = { core, sites, preview, approvals, audit, openFs: async () => siteFs, appName, fetchUrl, layout, support: new SupportLog(pool) };
+  const uploads = new UploadService({ pool, sites, core, openFs: async () => siteFs, publicUrl: base });
+  const mcp = { core, sites, preview, approvals, uploads, audit, openFs: async () => siteFs, appName, fetchUrl, layout, support: new SupportLog(pool) };
   sitesRepo = sites;
   const clientApi = { pool, sites, audit, appName, reqKey, removeSite: (grantId: string, siteId: string) => provider.removeSite(grantId, siteId) };
-  server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals, clientApi, openaiAppsChallenge: 'test-challenge-token', events: { pool, sites, reqKey }, registrationRateLimit: false }));
+  server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals, uploads, clientApi, openaiAppsChallenge: 'test-challenge-token', events: { pool, sites, reqKey }, registrationRateLimit: false }));
 });
 
 afterAll(async () => {
@@ -470,7 +475,7 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     const { tools } = await c.listTools();
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
     expect(Object.keys(byName).sort()).toEqual(
-      ['add_attachments', 'delete_files', 'discard_changeset', 'edit_file', 'import_from_url', 'get_activity_log', 'get_site_info', 'get_usage_limits', 'list_files', 'list_releases', 'list_sites', 'preview_changeset', 'publish', 'read_file', 'revert_release', 'start_changeset', 'write_files'].sort(),
+      ['add_attachments', 'delete_files', 'discard_changeset', 'edit_file', 'import_from_url', 'get_activity_log', 'get_upload_link', 'get_site_info', 'get_usage_limits', 'list_files', 'list_releases', 'list_sites', 'preview_changeset', 'publish', 'read_file', 'revert_release', 'start_changeset', 'write_files'].sort(),
     );
     for (const t of tools) {
       expect(t.annotations, t.name).toMatchObject({ readOnlyHint: expect.any(Boolean), destructiveHint: expect.any(Boolean), openWorldHint: expect.any(Boolean) });
@@ -907,6 +912,113 @@ describe('import_from_url', () => {
   });
 });
 
+describe('upload links (files from the device, or from the assistant\'s sandbox)', () => {
+  const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const put = (url: string, body: Buffer | string, headers: Record<string, string> = {}) => fetch(url, { method: 'PUT', body, headers });
+
+  it('takes media into one folder of the draft; the assistant sees what arrived', async () => {
+    const c = await mcpClient(await connect('publish'));
+    const { data: draft } = await call(c, 'start_changeset');
+    const link = await call(c, 'get_upload_link', { changeset_id: draft.changeset_id, folder: 'img/fotos', widths: [1200, 800, 800] });
+    expect(link.isError).toBe(false);
+    expect(link.data).toMatchObject({ folder: 'img/fotos', uploaded: [] });
+    const url: string = link.data.upload_url;
+    expect(url).toMatch(new RegExp(`^${base}/upload/[A-Za-z0-9_-]{32}$`));
+    expect(link.text).toContain(url);
+
+    // The page for the owner: ours, locked down, never cached or indexed.
+    const pageRes = await get(new URL(url).pathname, { 'accept-language': 'es' });
+    expect(pageRes.status).toBe(200);
+    const html = await pageRes.text();
+    expect(html).toContain('Suba sus fotos');
+    expect(html).toContain('uat.example');
+    expect(html).toContain('"widths":[800,1200]');
+    const csp = pageRes.headers.get('content-security-policy')!;
+    const nonce = /script-src 'nonce-([^']+)'/.exec(csp)?.[1];
+    expect(html).toContain(`<script nonce="${nonce}">`);
+    expect(csp).toContain("default-src 'none'");
+    expect(csp).toContain("frame-ancestors 'none'");
+    expect(pageRes.headers.get('cache-control')).toBe('no-store');
+    expect(pageRes.headers.get('x-robots-tag')).toContain('noindex');
+    expect((await (await get(new URL(url).pathname, { 'accept-language': 'en' })).text())).toContain('Upload your photos');
+
+    // One request per file, the file as the body (what curl -T does).
+    const first = await put(`${url}/${encodeURIComponent('Mi Foto (1).PNG')}`, PNG);
+    expect(first.status).toBe(201);
+    expect(await first.json()).toEqual({ ok: true, path: 'img/fotos/mi-foto-1.png', size: 11 });
+    // The page asks for a free name; the assistant's own upload replaces the file in the draft.
+    expect(await (await put(`${url}/mi-foto-1.png?unique=1`, PNG)).json()).toMatchObject({ path: 'img/fotos/mi-foto-1-2.png' });
+    expect(await (await put(`${url}/mi-foto-1.png`, Buffer.concat([PNG, PNG]))).json()).toMatchObject({ path: 'img/fotos/mi-foto-1.png', size: 22 });
+
+    // Same checks as import_from_url.
+    const fake = await put(`${url}/pagina.png`, '<!doctype html><p>login</p>');
+    expect(fake.status).toBe(415);
+    expect(((await fake.json()) as { error: string }).error).toContain('not really a .png');
+    for (const name of ['shell.php', 'index.html', '.htaccess', 'sin-extension']) expect((await put(`${url}/${name}`, PNG)).status, name).toBeGreaterThanOrEqual(400);
+    expect((await put(`${url}/vacio.png`, '')).status).toBe(400);
+    expect((await put(url, PNG)).status).toBe(400);
+    expect((await put(`${url}/a.png`, 'x', { 'content-type': 'multipart/form-data; boundary=x' })).status).toBe(415);
+    expect((await put(`${url}/..%2F..%2Fa.png`, PNG)).status).toBe(201); // the name is cleaned: it stays in the folder
+    // The link gives nothing back.
+    expect((await get(`${new URL(url).pathname}/mi-foto-1.png`)).status).toBe(404);
+
+    const again = await call(c, 'get_upload_link', { changeset_id: draft.changeset_id, folder: 'img/fotos' });
+    expect(again.data.upload_url).not.toBe(url);
+    expect(again.data.uploaded).toEqual([
+      { path: 'img/fotos/mi-foto-1-2.png', size: 11 },
+      { path: 'img/fotos/mi-foto-1.png', size: 22 },
+      { path: 'img/fotos/a.png', size: 11 },
+    ]);
+    const pv = await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+    expect(pv.data.added).toEqual(['img/fotos/a.png', 'img/fotos/mi-foto-1-2.png', 'img/fotos/mi-foto-1.png']);
+    expect(siteFs.files.has('img/fotos/a.png')).toBe(false);
+
+    // A file removed from the draft is no longer listed; the link dies with the draft.
+    await call(c, 'delete_files', { changeset_id: draft.changeset_id, paths: ['img/fotos/a.png'] });
+    expect((await call(c, 'get_upload_link', { changeset_id: draft.changeset_id })).data.uploaded).toHaveLength(2);
+    await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
+    const dead = await put(`${url}/tarde.png`, PNG);
+    expect(dead.status).toBe(404);
+    expect(((await dead.json()) as { error: string }).error).toContain('get_upload_link');
+    const gone = await get(new URL(url).pathname);
+    expect(gone.status).toBe(404);
+    expect(await gone.text()).toContain('ya no está disponible');
+    expect((await get('/upload/' + 'x'.repeat(32))).status).toBe(404);
+    await c.close();
+  });
+
+  it('never replaces a live file from the page, and keeps tokens and file names out of the request log', async () => {
+    const c = await mcpClient(await connect('publish'));
+    const { data: draft } = await call(c, 'start_changeset');
+    const link = await call(c, 'get_upload_link', { changeset_id: draft.changeset_id, folder: 'assets' });
+    const logs: string[] = [];
+    const orig = console.log;
+    console.log = (m: string) => logs.push(m);
+    try {
+      siteFs.files.set('assets/logo.png', { data: PNG, modified: new Date().toISOString() });
+      expect(await (await put(`${link.data.upload_url}/logo.png?unique=1`, PNG)).json()).toMatchObject({ path: 'assets/logo-2.png' });
+    } finally {
+      console.log = orig;
+      siteFs.files.delete('assets/logo.png');
+    }
+    const line = logs.map((l) => JSON.parse(l)).find((l) => l.m === 'PUT');
+    expect(line.p).toBe('/upload/:token/:file');
+    await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
+    await c.close();
+  });
+
+  it('add_attachments points at the upload link when the app gives no download link', async () => {
+    const c = await mcpClient(await connect('publish'));
+    const { data: draft } = await call(c, 'start_changeset');
+    const r = await call(c, 'add_attachments', { changeset_id: draft.changeset_id, files: [{ download_url: '/mnt/user-data/uploads/foto.png', file_id: 'foto.png' }], paths: ['img/foto.png'] });
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('get_upload_link');
+    expect(r.data.use_instead).toEqual(['get_upload_link', 'import_from_url']);
+    await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
+    await c.close();
+  });
+});
+
 describe('client area exchange errors', () => {
   it('logs the client area reason without the code or key', async () => {
     const { ClientAreaClient } = await import('../src/auth/clientarea.js');
@@ -1172,6 +1284,7 @@ describe('several sites per hosting service and per connection', () => {
       ['edit_file', { path: 'dev/index.html', edits: [{ old_text: 'a', new_text: 'b' }] }],
       ['delete_files', { paths: ['./dev/old.html'] }],
       ['import_from_url', { url: 'https://img.example/foto.png', path: 'dev/foto.png' }],
+      ['get_upload_link', { folder: 'dev/img' }],
     ] as const) {
       const r = await call(c, tool, { changeset_id: d.changeset_id, ...args });
       expect(r.isError, tool).toBe(true);

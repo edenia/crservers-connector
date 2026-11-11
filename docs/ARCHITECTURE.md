@@ -127,7 +127,7 @@ Every tool works on one of the connection's sites (see [Sites and connections](#
 | Kind | Tools |
 |---|---|
 | Read-only | `list_sites`, `get_site_info`, `get_usage_limits`, `list_files`, `read_file`, `list_releases`, `get_activity_log` |
-| Draft (nothing goes live) | `start_changeset`, `write_files`, `edit_file`, `import_from_url`, `delete_files`, `preview_changeset`, `discard_changeset` |
+| Draft (nothing goes live) | `start_changeset`, `write_files`, `edit_file`, `import_from_url`, `add_attachments`, `get_upload_link`, `delete_files`, `preview_changeset`, `discard_changeset` |
 | Live (destructive, the host asks the user) | `publish`, `revert_release` |
 
 The server's instructions tell the AI to:
@@ -180,6 +180,22 @@ When it's on, `publish` doesn't go live. It returns an approval link for the AI 
 - Public addresses only, checked on every connection, including after redirects. Loopback, private, link-local, carrier-grade NAT and cluster addresses are refused even when a public name resolves to them.
 - At most 5 redirects, 30 seconds, and the usual per-file size cap.
 
+**Files attached in the chat.** How a photo the user attached reaches the draft depends on the AI app:
+- **ChatGPT** hands the connector a download link for each attachment (`add_attachments`, OpenAI file parameters).
+- **Claude and other apps** don't. There, `add_attachments` fails with a message that names the two ways that do work: `get_upload_link`, or `import_from_url` for a file at a public link.
+
+**Upload links.** `get_upload_link` returns a private link, valid for an hour, that takes media files into one folder of one draft (`src/upload/upload.ts`). The same link works two ways:
+- **The assistant sends the file itself.** When the app gives the assistant a code sandbox that holds the chat's attachments and can reach this host (Claude's code execution, with network access to `connect.crservers.com`), it uploads each file with one request: `PUT /upload/<token>/<file name>`, the file as the body. The user does nothing. A file with the same name as an existing one replaces it in the draft, which is how a photo is swapped.
+- **The owner opens the link** (`/upload/<token>`) on their phone or computer and picks or drops the files. The page redraws photos on the device before sending them: 2000 px on the long side at most, JPEG quality 78, which also removes location data. With `widths` it adds narrower copies for `srcset` (`foto-800.jpg`). Other files go up as they are. The page never replaces a file: a name already in the draft or on the site gets `-2`.
+
+Either way the server applies the rules of `import_from_url`: media only, first bytes must match the extension, the per-file and draft size caps, the site's path rules, and no changes inside a subdomain's folder. File names are reduced to lowercase ASCII. The token is the only credential, so the link is kept small:
+- it can add media to one folder of one draft, and nothing else: no reading, no listing (the page shows only this draft's own uploads), no deleting, nothing live. The preview and the publish confirmation still stand between an upload and the site;
+- it stops working after an hour, after 60 files, or when the draft is published, discarded or expires;
+- only its SHA-256 hash is stored, and request logs carry neither the token nor the file name;
+- the page loads nothing from other origins (`default-src 'none'`, a per-response script nonce) and can't be framed.
+
+`get_upload_link` also returns `uploaded`: the files that arrived through this draft's links and are still in the draft. The assistant calls it again to learn the paths.
+
 **Transport.** FTPS with certificate verification, using a deploy user whose home is the site's web root. The jail is enforced by the server, and paths are normalized again by the connector: no `..`, no symlinks.
 
 ## What the AI can and can't do
@@ -209,6 +225,7 @@ A daily job deletes what's past its period (`src/db/cleanup.ts`). The public pri
 |---|---|
 | Drafts and their staged files | Until published or discarded, at most 24 hours |
 | Preview links | 1 hour |
+| Upload links | 1 hour (the files they bring are draft files: see above) |
 | Undo copies | The last 5 publishes per site |
 | Activity log | 12 months |
 | Connections (grants) and their tokens | While active; deleted 90 days after revocation |

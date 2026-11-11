@@ -410,6 +410,49 @@
       }
     },
     {
+      "name": "get_upload_link",
+      "title": "Get upload link",
+      "description": "Returns upload_url, a private link (valid 1 hour) that takes photos and other media files into one folder of the draft stored on CR Servers (the live site doesn't change until publish). Use it when the user wants to add files from their device, or attached them in the chat and add_attachments can't read them. Two ways to use it: if you have the file in a code sandbox with network access, upload it yourself with one HTTP PUT per file to upload_url + \"/\" + file name, the file as the request body (curl -T foto.jpg \"<upload_url>/foto.jpg\"); otherwise give upload_url to the user, who opens it and picks the files on their phone or computer. Call it again to see what has arrived (uploaded). Media only (images, video, audio, fonts, PDF); each file must really be the type its name says.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "changeset_id": {
+            "type": "string"
+          },
+          "folder": {
+            "default": "img",
+            "description": "Folder in the site where the files go, e.g. \"img\" or \"img/proyectos\". To replace an existing photo, use its folder and upload a file with the same name.",
+            "type": "string",
+            "maxLength": 200
+          },
+          "widths": {
+            "description": "Extra copies the upload page makes of each photo for srcset, by width in pixels, e.g. [800, 1200, 1600] gives foto-800.jpg and so on. Only for files the user uploads on the page.",
+            "maxItems": 4,
+            "type": "array",
+            "items": {
+              "type": "integer",
+              "minimum": 200,
+              "maximum": 2000
+            }
+          }
+        },
+        "required": [
+          "changeset_id"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "title": "Get upload link"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
       "name": "delete_files",
       "title": "Delete files in draft",
       "description": "Marks files for deletion and saves that to the draft stored on CR Servers. The files are deleted from the live site only when the draft is published.",

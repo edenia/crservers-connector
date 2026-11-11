@@ -920,7 +920,8 @@ describe('upload links (files from the device, or from the assistant\'s sandbox)
     expect(link.isError).toBe(false);
     expect(link.data).toMatchObject({ folder: 'img/fotos', uploaded: [] });
     const url: string = link.data.upload_url;
-    expect(url).toMatch(new RegExp(`^${base}/upload/[A-Za-z0-9_-]{32}$`));
+    // Letters and digits only: chats drop a trailing "_" or "-" when they turn the address into a link.
+    expect(url).toMatch(new RegExp(`^${base}/upload/[0-9a-f]{48}$`));
     expect(link.text).toContain(url);
 
     // The page for the owner: ours, locked down, never cached or indexed.

@@ -153,6 +153,8 @@ The tool list is the same for both. For 2025-era clients it is byte-for-byte wha
 
 - `publish` refused for a stale preview says how many files changed after the last preview, which ones, when and by which source, and tells the assistant to preview again and confirm with the user;
 - `preview_changeset` returns `changed_by` (files per source) and, from the second preview on, `changed_since_last_preview`, with a note to tell the user when the assistant did not make those changes itself;
+- the app's name comes from its own registration, so it is reduced to a plain label (letters, digits, spaces, dots, hyphens, 40 characters) before it is stored or shown, and it can't be `upload link` or `CR Servers`;
+- a preview from any chat counts as the preview: if a second chat previews after its own changes, the first chat's `publish` goes through. Owners who want a check on every publish turn on approval in the client area;
 - `get_activity_log` returns `open_drafts` (start, expiry, files changed, last change, files per source). Edits are not activity events: one session makes dozens. The draft's id is not shown.
 
 **Preview links.** `preview_changeset` also returns a private link, valid for an hour, that shows the draft as the site would look. Files the draft changed come from the draft; everything else comes from the live site. The link stops working once the draft is published, discarded or expires. Pages are served under `/p/<token>/` on the connector's host with these protections:

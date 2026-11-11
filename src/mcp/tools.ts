@@ -2,7 +2,7 @@ import { newRef } from '../crypto.js';
 import type { SupportLog } from '../db/support.js';
 import { McpServer, type AuthInfo, type CallToolResult, type ListToolsResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { DeployCore, DeployError, stalePreviewMessage } from '../deploy/core.js';
+import { BY_ASSISTANT, BY_SERVER, BY_UPLOAD_LINK, DeployCore, DeployError, stalePreviewMessage } from '../deploy/core.js';
 import { ImportError, assertMediaMatches, fetchPublicUrl, type UrlFetcher } from '../deploy/fetchurl.js';
 import { MB, PathError, SITE_GUIDE_MAX_BYTES, maxFileBytes, normalizeSiteDir, normalizeSitePath } from '../deploy/paths.js';
 import { isSkeletonPath } from '../deploy/skeleton.js';
@@ -66,7 +66,7 @@ const MAX_CALL_FILES = 50;
 const READ_PAGE = 20_000;
 const SECRET_NOTE = 'Este archivo puede contener contraseñas o claves: no se muestra ni se puede cambiar desde aquí. / This file may hold passwords or keys: its content isn\'t shown and it can\'t be changed from here.';
 
-type Ctx = { site: Site; permission: 'preview' | 'publish'; clientId: string; /** The app's name ("Claude"), recorded as the author of draft changes. */ by: string };
+type Ctx = { site: Site; permission: 'preview' | 'publish'; clientId: string; /** The app's name ("Claude"), recorded as the author of draft changes. Looked up only by the tools that write. */ by: () => Promise<string> };
 /** Which site a tool call works on: a draft's, or a domain the AI named. */
 type SitePick = { changesetId?: string; site?: string };
 
@@ -102,6 +102,16 @@ function publicDetail(d: Record<string, unknown>): Record<string, unknown> {
   if (d.approved_in_browser) out.approved_in_browser = true;
   if (typeof d.approve_every_publish === 'boolean') out.approve_every_publish = d.approve_every_publish;
   return out;
+}
+
+/**
+ * The app's name as the source of a draft change. The name comes from the app's own registration and
+ * ends up in tool output that an assistant reads, so it is reduced to a short plain label: letters,
+ * digits, spaces, dots and hyphens, on one line. It can't pass for a source the server itself names.
+ */
+export function sourceLabel(name: string): string {
+  const label = name.normalize('NFKC').replace(/[^\p{L}\p{N} .-]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 40).trim() || 'app';
+  return [BY_UPLOAD_LINK, BY_ASSISTANT, BY_SERVER.toLowerCase()].includes(label.toLowerCase()) ? `app ${label}` : label;
 }
 
 /** How many changed files a preview lists by name. */
@@ -187,8 +197,8 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
     const held: { fs?: SiteFs } = {};
     const fs = async () => (held.fs ??= await deps.openFs(current.id));
     try {
-      // The name comes from the app's own registration, so it is cut short before it is stored and shown.
-      const by = (deps.appName ? await deps.appName(auth.clientId).catch(() => auth.clientId) : auth.clientId).slice(0, 60);
+      let label: Promise<string> | undefined;
+      const by = () => (label ??= (deps.appName ? deps.appName(auth.clientId).catch(() => auth.clientId) : Promise.resolve(auth.clientId)).then(sourceLabel));
       return await fn({ site: current, permission, clientId: auth.clientId, by }, fs);
     } catch (e) {
       const ref = (trace.ref = newRef());
@@ -364,7 +374,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
           if (n !== 1) return fail(`Edición ${i + 1}: el texto buscado aparece ${n} veces; debe aparecer exactamente 1. / Edit ${i + 1}: old_text found ${n} times, must be exactly 1.`);
           text = text.replace(e.old_text, () => e.new_text ?? '');
         }
-        const [res] = await deps.core.writeFiles(a.changeset_id, site.id, f, [{ path: cur.path, content: Buffer.from(text, 'utf8') }], by);
+        const [res] = await deps.core.writeFiles(a.changeset_id, site.id, f, [{ path: cur.path, content: Buffer.from(text, 'utf8') }], await by());
         if (!res?.ok) return fail(res?.error ?? 'No se pudo editar. / Edit failed.');
         const after = await deps.core.readFile(site.id, f, cur.path, a.changeset_id);
         return ok(`${a.edits.length} cambio(s) en ${cur.path} (borrador). / ${a.edits.length} edit(s) staged.`, { path: cur.path, size: after.size, hash: after.hash });
@@ -414,7 +424,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
         const files = a.files.map((f) => ({ path: f.path, content: Buffer.from(f.content, f.encoding), baseHash: f.base_hash }));
         const total = files.reduce((n, f) => n + f.content.length, 0);
         if (total > MAX_CALL_BYTES) return fail(`Demasiado grande para una llamada (${(total / MB).toFixed(1)} MB). Divida en varias llamadas. / Too large for one call; split it.`);
-        const results = await deps.core.writeFiles(a.changeset_id, site.id, await fs(), files, by);
+        const results = await deps.core.writeFiles(a.changeset_id, site.id, await fs(), files, await by());
         const okCount = results.filter((r) => r.ok).length;
         return ok(`${okCount} de ${results.length} archivos en el borrador. / ${okCount} of ${results.length} files staged.`, { results });
       })(),
@@ -440,7 +450,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
         const path = normalizeSitePath(a.path);
         const dl = await (deps.fetchUrl ?? fetchPublicUrl)(a.url, maxFileBytes(path));
         assertMediaMatches(path, dl.data);
-        const [res] = await deps.core.writeFiles(a.changeset_id, site.id, await fs(), [{ path, content: dl.data }], by);
+        const [res] = await deps.core.writeFiles(a.changeset_id, site.id, await fs(), [{ path, content: dl.data }], await by());
         if (!res?.ok) return fail(res?.error ?? 'No se pudo agregar. / Could not stage the file.');
         return ok(`${path} agregado al borrador (${(dl.data.length / 1024).toFixed(0)} KB). / Staged ${path}.`, { path, size: dl.data.length, content_type: dl.contentType });
       })(),
@@ -476,7 +486,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
           if (!/^https?:\/\/\S+$/i.test(file.download_url.trim())) return fail(NO_ATTACHMENT, { path, added, use_instead: ['get_upload_link', 'import_from_url'] });
           const dl = await (deps.fetchUrl ?? fetchPublicUrl)(file.download_url.trim(), maxFileBytes(path));
           assertMediaMatches(path, dl.data);
-          const [res] = await deps.core.writeFiles(a.changeset_id, site.id, await fs(), [{ path, content: dl.data }], by);
+          const [res] = await deps.core.writeFiles(a.changeset_id, site.id, await fs(), [{ path, content: dl.data }], await by());
           if (!res?.ok) return fail(res?.error ?? 'No se pudo agregar. / Could not stage the file.', { path, added });
           added.push({ path, size: dl.data.length });
         }
@@ -532,7 +542,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
       run({ changesetId: a.changeset_id }, async ({ site, by }, fs) => {
         const refused = refuseOtherSites(site, a.paths);
         if (refused) return refused;
-        const results = await deps.core.deleteFiles(a.changeset_id, site.id, await fs(), a.paths, by);
+        const results = await deps.core.deleteFiles(a.changeset_id, site.id, await fs(), a.paths, await by());
         return ok(`${results.filter((r) => r.ok).length} marcados para borrar. / marked for deletion.`, { results });
       })(),
   );

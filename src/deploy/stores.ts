@@ -32,6 +32,8 @@ export interface DraftChange {
   v: number;
   at: string;
   by: string;
+  /** The path left the draft (a file that existed only in the draft was deleted): kept so the next preview can say so. */
+  gone?: true;
 }
 
 /** An open draft without its files (activity log). */

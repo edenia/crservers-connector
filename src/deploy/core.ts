@@ -79,10 +79,14 @@ export interface ChangedFile {
   path: string;
   at: string;
   by: string;
+  /** The file was taken out of the draft (it existed only there). */
+  removed_from_draft?: true;
 }
 
 /** Default source of a change when the caller names none. */
 export const BY_ASSISTANT = 'assistant';
+/** Source of the placeholder deletions the preview plans itself (skeleton.ts). */
+export const BY_SERVER = 'CR Servers';
 /** Source of files that arrive through an upload link (src/upload/upload.ts). */
 export const BY_UPLOAD_LINK = 'upload link';
 
@@ -92,13 +96,19 @@ function changedAfter(d: Pick<Draft, 'changes'>, version: number | null): Change
   return [...d.changes]
     .filter(([, c]) => c.v > version)
     .sort((a, b) => b[1].v - a[1].v || a[0].localeCompare(b[0]))
-    .map(([path, c]) => ({ path, at: c.at, by: c.by }));
+    .map(([path, c]) => ({ path, at: c.at, by: c.by, ...(c.gone ? { removed_from_draft: true as const } : {}) }));
 }
 
+/** Files the draft holds, per source. A Map does the counting: a source can be named "constructor". */
 function countBy(changes: Map<string, DraftChange>): Record<string, number> {
-  const out: Record<string, number> = {};
-  for (const c of changes.values()) out[c.by] = (out[c.by] ?? 0) + 1;
-  return out;
+  const n = new Map<string, number>();
+  for (const c of held(changes)) n.set(c.by, (n.get(c.by) ?? 0) + 1);
+  return Object.fromEntries(n);
+}
+
+/** Records of the paths the draft still holds (not the ones that left it). */
+function held(changes: Map<string, DraftChange>): DraftChange[] {
+  return [...changes.values()].filter((c) => !c.gone);
 }
 
 /** One sentence for the publish refusal: what changed after the preview the user saw. */
@@ -179,7 +189,7 @@ export class DeployCore {
       id: d.id,
       createdAt: d.createdAt,
       expiresAt: d.expiresAt,
-      files: d.changes.size,
+      files: held(d.changes).length,
       lastChangeAt: [...d.changes.values()].map((c) => c.at).sort().at(-1) ?? null,
       changedBy: countBy(d.changes),
     }));
@@ -276,8 +286,7 @@ export class DeployCore {
         if (existsLive) d.deletes.add(path);
         d.skeletonDeletes.delete(path);
         // A file that existed only in the draft leaves it; a live one stays as a deletion.
-        if (existsLive) d.changes.set(path, change);
-        else d.changes.delete(path);
+        d.changes.set(path, existsLive ? change : { ...change, gone: true });
         results.push({ path, ok: true });
       } catch (e) {
         results.push({ path, ok: false, error: (e as Error).message });
@@ -405,16 +414,23 @@ export class DeployCore {
    */
   private async planSkeletonCleanup(d: Draft, fs: SiteFs): Promise<boolean> {
     const before = [...d.skeletonDeletes].sort().join('\n');
+    const planned = new Map<string, DraftChange>();
     for (const p of d.skeletonDeletes) {
       d.deletes.delete(p);
       d.base.delete(p);
       d.earlyConflicts.delete(p);
+      const c = d.changes.get(p);
+      if (c) planned.set(p, c);
+      d.changes.delete(p);
     }
     d.skeletonDeletes.clear();
+    // The caller bumps the version when the plan changed, so a newly planned deletion belongs to the next one.
+    const change: DraftChange = { v: d.version + 1, at: this.now().toISOString(), by: BY_SERVER };
     for (const [p, hash] of await this.skeletonToRemove(d, fs)) {
       await this.touch(d, fs, p, hash);
       d.deletes.add(p);
       d.skeletonDeletes.add(p);
+      d.changes.set(p, planned.get(p) ?? change);
     }
     return [...d.skeletonDeletes].sort().join('\n') !== before;
   }

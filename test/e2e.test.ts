@@ -1055,8 +1055,12 @@ describe('upload links (files from the device, or from the assistant\'s sandbox)
     expect(JSON.stringify(log.data)).not.toContain(id);
 
     // A file that existed only in the draft and is deleted leaves the record.
+    // A file that existed only in the draft and is deleted: the refusal and the next preview say it left, and it is no longer counted.
     await call(c, 'delete_files', { changeset_id: id, paths: ['img/despues.png'] });
-    expect((await call(c, 'preview_changeset', { changeset_id: id })).data.changed_by).toEqual({ [apps[0]!]: 1 });
+    expect((await call(c, 'publish', { changeset_id: id })).text).toContain('1 file(s) (img/despues.png)');
+    const fourth = await call(c, 'preview_changeset', { changeset_id: id });
+    expect(fourth.data.changed_since_last_preview).toEqual([{ path: 'img/despues.png', at: expect.any(String), by: apps[0], removed_from_draft: true }]);
+    expect(fourth.data.changed_by).toEqual({ [apps[0]!]: 1 });
     await call(c, 'discard_changeset', { changeset_id: id });
     await c.close();
   });

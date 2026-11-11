@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import express, { type Request, type Response } from 'express';
 import type { Pool } from 'pg';
 import { hashToken } from '../crypto.js';
-import type { DeployCore } from '../deploy/core.js';
+import { BY_UPLOAD_LINK, type DeployCore } from '../deploy/core.js';
 import { IMPORTABLE_EXT, ImportError, assertMediaMatches } from '../deploy/fetchurl.js';
 import { MB, PathError, extOf, maxFileBytes, normalizeSiteDir, normalizeSitePath } from '../deploy/paths.js';
 import type { SiteFs } from '../deploy/sitefs.js';
@@ -207,7 +207,7 @@ export class UploadService {
       });
       try {
         if (unique) path = await freePath(path, (p) => this.taken(t.draftId, fs, p));
-        const [res] = await this.d.core.writeFiles(t.draftId, t.siteId, fs, [{ path, content: data }]);
+        const [res] = await this.d.core.writeFiles(t.draftId, t.siteId, fs, [{ path, content: data }], BY_UPLOAD_LINK);
         if (!res?.ok) throw new UploadError(400, res?.error ?? 'Could not add the file');
         saved = true;
         await this.d.pool.query(

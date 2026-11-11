@@ -1015,6 +1015,52 @@ describe('upload links (files from the device, or from the assistant\'s sandbox)
     await c.close();
   });
 
+  it('says what changed after the preview: publish refusal, next preview and activity log', async () => {
+    const c = await mcpClient(await connect('publish'));
+    const { data: draft } = await call(c, 'start_changeset');
+    const id = draft.changeset_id;
+    expect((await call(c, 'write_files', { changeset_id: id, files: [{ path: 'nota.html', content: '<p>uno</p>' }] })).isError).toBe(false);
+
+    // First preview: nothing to compare with, one source.
+    const first = await call(c, 'preview_changeset', { changeset_id: id });
+    expect(first.data.changed_since_last_preview).toBeUndefined();
+    const apps = Object.keys(first.data.changed_by);
+    expect(apps).toHaveLength(1);
+    expect(first.data.changed_by[apps[0]!]).toBe(1);
+
+    // Someone else (here the upload link, it could be another chat) changes the draft after the preview.
+    const link = await call(c, 'get_upload_link', { changeset_id: id, folder: 'img' });
+    expect((await put(`${link.data.upload_url}/despues.png`, PNG)).status).toBe(201);
+
+    // Publish is refused, and the refusal names the file, the source and what to do.
+    const refused = await call(c, 'publish', { changeset_id: id });
+    expect(refused.isError).toBe(true);
+    expect(refused.text).toContain('The draft changed after the last preview: 1 file(s) (img/despues.png)');
+    expect(refused.text).toContain('by upload link');
+    expect(refused.text).toContain('preview_changeset again');
+
+    // The next preview lists it, with who changed what.
+    const second = await call(c, 'preview_changeset', { changeset_id: id });
+    expect(second.data.changed_since_last_preview).toEqual([{ path: 'img/despues.png', at: expect.any(String), by: 'upload link' }]);
+    expect(second.data.changed_since_last_preview_total).toBe(1);
+    expect(second.data.changed_by).toMatchObject({ 'upload link': 1, [apps[0]!]: 1 });
+    expect(second.text).toContain('changed since the previous preview (by: upload link)');
+
+    // A third preview with no change in between lists nothing.
+    expect((await call(c, 'preview_changeset', { changeset_id: id })).data.changed_since_last_preview).toBeUndefined();
+
+    // The activity log shows the draft in progress (edits are not events), without its id.
+    const log = await call(c, 'get_activity_log', {});
+    expect(log.data.open_drafts).toContainEqual({ started: expect.any(String), expires_at: expect.any(String), files_changed: 2, last_change: expect.any(String), changed_by: { 'upload link': 1, [apps[0]!]: 1 } });
+    expect(JSON.stringify(log.data)).not.toContain(id);
+
+    // A file that existed only in the draft and is deleted leaves the record.
+    await call(c, 'delete_files', { changeset_id: id, paths: ['img/despues.png'] });
+    expect((await call(c, 'preview_changeset', { changeset_id: id })).data.changed_by).toEqual({ [apps[0]!]: 1 });
+    await call(c, 'discard_changeset', { changeset_id: id });
+    await c.close();
+  });
+
   it('stops working when the connection loses access to the site', async () => {
     const c = await mcpClient(await connect('publish'));
     const { data: draft } = await call(c, 'start_changeset');

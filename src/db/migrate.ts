@@ -324,6 +324,12 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       );
     `,
   },
+  {
+    // Last change of each path in a draft (version, time, who): the preview and the publish refusal
+    // say what changed since the last preview, and the activity log lists open drafts.
+    id: '015_draft_changes',
+    sql: `ALTER TABLE drafts ADD COLUMN changes jsonb NOT NULL DEFAULT '{}'::jsonb;`,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

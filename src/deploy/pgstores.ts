@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { Pool } from 'pg';
-import type { BlobStore, Draft, DraftStore, Release, ReleaseStore } from './stores.js';
+import type { BlobStore, Draft, DraftChange, DraftInfo, DraftStore, Release, ReleaseStore } from './stores.js';
 
 /** Postgres-backed stores so drafts, releases and revert records survive restarts. */
 
@@ -34,6 +34,7 @@ export class PgDraftStore implements DraftStore {
       startFingerprints: new Map(Object.entries(d.start_fingerprints as Record<string, string>)),
       earlyConflicts: new Set(d.early_conflicts as string[]),
       skeletonDeletes: new Set(d.skeleton_deletes as string[]),
+      changes: new Map(Object.entries((d.changes ?? {}) as Record<string, DraftChange>)),
     };
   }
 
@@ -42,14 +43,14 @@ export class PgDraftStore implements DraftStore {
     try {
       await c.query('BEGIN');
       await c.query(
-        `INSERT INTO drafts (id, site_id, note, created_at, expires_at, version, previewed_version, base, start_fingerprints, early_conflicts, skeleton_deletes)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        `INSERT INTO drafts (id, site_id, note, created_at, expires_at, version, previewed_version, base, start_fingerprints, early_conflicts, skeleton_deletes, changes)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
          ON CONFLICT (id) DO UPDATE SET version = EXCLUDED.version, previewed_version = EXCLUDED.previewed_version,
-           base = EXCLUDED.base, early_conflicts = EXCLUDED.early_conflicts, skeleton_deletes = EXCLUDED.skeleton_deletes`,
+           base = EXCLUDED.base, early_conflicts = EXCLUDED.early_conflicts, skeleton_deletes = EXCLUDED.skeleton_deletes, changes = EXCLUDED.changes`,
         [
           draft.id, draft.siteId, draft.note, draft.createdAt, draft.expiresAt, draft.version, draft.previewedVersion,
           JSON.stringify(Object.fromEntries(draft.base)), JSON.stringify(Object.fromEntries(draft.startFingerprints)), JSON.stringify([...draft.earlyConflicts]),
-          JSON.stringify([...draft.skeletonDeletes]),
+          JSON.stringify([...draft.skeletonDeletes]), JSON.stringify(Object.fromEntries(draft.changes)),
         ],
       );
       // Only rewrite files whose content changed (drafts can hold large media).
@@ -88,6 +89,11 @@ export class PgDraftStore implements DraftStore {
 
   async delete(id: string): Promise<void> {
     await this.pool.query('DELETE FROM drafts WHERE id = $1', [id]);
+  }
+
+  async openBySite(siteId: string, now: Date): Promise<DraftInfo[]> {
+    const rows = (await this.pool.query('SELECT id, created_at, expires_at, changes FROM drafts WHERE site_id = $1 AND expires_at > $2 ORDER BY created_at DESC LIMIT 20', [siteId, now])).rows;
+    return rows.map((r) => ({ id: r.id, createdAt: r.created_at, expiresAt: r.expires_at, changes: new Map(Object.entries((r.changes ?? {}) as Record<string, DraftChange>)) }));
   }
 }
 

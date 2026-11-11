@@ -33,6 +33,8 @@ const PATH_RE = /^\/([A-Za-z0-9_-]{20,64})(?:\/(.*))?$/;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 /** Uploads held in memory at once (each up to 25 MB, 100 MB for video). */
 const MAX_IN_FLIGHT = 3;
+/** How long one file may take to arrive (four times this for video). */
+const BODY_TIMEOUT_MS = 150_000;
 
 export interface UploadedFile {
   path: string;
@@ -100,6 +102,8 @@ export class UploadService {
   private readonly queues = new Map<string, Promise<unknown>>();
   /** Bodies are held in memory until they are in the draft: only a few at a time, whoever sends them. */
   private readonly inFlight = new Semaphore(MAX_IN_FLIGHT);
+  /** One body at a time per site, so a slow or stalled sender only holds up its own site. */
+  private readonly perSite = new Map<string, Semaphore>();
   private readonly bodies = new Map<number, ReturnType<typeof express.raw>>();
 
   constructor(private readonly d: UploadDeps) {}
@@ -241,11 +245,39 @@ export class UploadService {
     return run;
   }
 
-  /** Reads the request body, refusing anything over `limit` bytes as soon as that is known. */
+  /** This site's turn to send a body, then one of the few places in memory. Returns the release. */
+  private async turn(siteId: string): Promise<() => void> {
+    let site = this.perSite.get(siteId);
+    if (!site) this.perSite.set(siteId, (site = new Semaphore(1)));
+    const own = site;
+    const leaveSite = await own.acquire();
+    const leaveAll = await this.inFlight.acquire();
+    return () => {
+      leaveAll();
+      leaveSite();
+      if (own.idle && this.perSite.get(siteId) === own) this.perSite.delete(siteId);
+    };
+  }
+
+  /**
+   * Reads the request body, refusing anything over `limit` bytes as soon as that is known, and
+   * giving up on a sender that doesn't finish in time (it would hold its place in memory).
+   */
   private readBody(req: Request, res: Response, limit: number): Promise<Buffer> {
     let parser = this.bodies.get(limit);
     if (!parser) this.bodies.set(limit, (parser = express.raw({ type: () => true, limit })));
-    return new Promise<Buffer>((resolve, reject) => parser(req, res, (e?: unknown) => (e ? reject(e) : resolve(Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)))));
+    const read = parser;
+    return new Promise<Buffer>((resolve, reject) => {
+      const timer = setTimeout(() => {
+        reject(new UploadError(408, 'The file took too long to arrive; try again'));
+        req.destroy();
+      }, limit > 25 * MB ? BODY_TIMEOUT_MS * 4 : BODY_TIMEOUT_MS);
+      read(req, res, (e?: unknown) => {
+        clearTimeout(timer);
+        if (e) reject(e);
+        else resolve(Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0));
+      });
+    });
   }
 
   /** Express handler mounted at /upload. req.path is "/<token>" (the page) or "/<token>/<file name>" (one file). */
@@ -278,7 +310,7 @@ export class UploadService {
         const limit = maxFileBytes(path);
         if (Number(req.get('content-length') ?? 0) > limit) throw new UploadError(413, `File too large (max ${limit / MB} MB)`);
         if (target.files >= UPLOAD_MAX_FILES) throw new UploadError(429, 'This link has taken all the files it can; ask your assistant for a new one');
-        const release = await this.inFlight.acquire();
+        const release = await this.turn(target.siteId);
         try {
           const data = await this.readBody(req, res, limit);
           const file = await this.store(target, path, data, req.query.unique === '1');
@@ -308,8 +340,12 @@ export class UploadService {
 class Semaphore {
   private free: number;
   private readonly waiting: (() => void)[] = [];
-  constructor(max: number) {
+  constructor(private readonly max: number) {
     this.free = max;
+  }
+  /** Nobody holding or waiting. */
+  get idle(): boolean {
+    return this.free === this.max && this.waiting.length === 0;
   }
   async acquire(): Promise<() => void> {
     if (this.free > 0) this.free--;

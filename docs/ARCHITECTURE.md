@@ -190,7 +190,8 @@ When it's on, `publish` doesn't go live. It returns an approval link for the AI 
 
 Either way the server applies the rules of `import_from_url`: media only, first bytes must match the extension, the per-file and draft size caps, the site's path rules, and no changes inside a subdomain's folder. File names are reduced to lowercase ASCII. The token is the only credential, so the link is kept small:
 - it can add media to one folder of one draft, and nothing else: no reading, no listing (the page shows only this draft's own uploads), no deleting, nothing live. The preview and the publish confirmation still stand between an upload and the site;
-- it stops working after an hour, after 60 files, or when the draft is published, discarded or expires;
+- it stops working after an hour, after 60 files, when the draft is published, discarded or expires, or when the connection that asked for it loses access to the site;
+- no SVG (it can carry script): the assistant writes SVG files with `write_files`;
 - only its SHA-256 hash is stored, and request logs carry neither the token nor the file name;
 - the page loads nothing from other origins (`default-src 'none'`, a per-response script nonce) and can't be framed.
 

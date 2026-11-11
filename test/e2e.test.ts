@@ -954,6 +954,7 @@ describe('upload links (files from the device, or from the assistant\'s sandbox)
     const fake = await put(`${url}/pagina.png`, '<!doctype html><p>login</p>');
     expect(fake.status).toBe(415);
     expect(((await fake.json()) as { error: string }).error).toContain('not really a .png');
+    expect((await put(`${url}/logo.svg`, '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>')).status).toBe(415);
     for (const name of ['shell.php', 'index.html', '.htaccess', 'sin-extension']) expect((await put(`${url}/${name}`, PNG)).status, name).toBeGreaterThanOrEqual(400);
     expect((await put(`${url}/vacio.png`, '')).status).toBe(400);
     expect((await put(url, PNG)).status).toBe(400);
@@ -1005,6 +1006,18 @@ describe('upload links (files from the device, or from the assistant\'s sandbox)
     expect(line.p).toBe('/upload/:token/:file');
     await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
     await c.close();
+  });
+
+  it('stops working when the connection loses access to the site', async () => {
+    const c = await mcpClient(await connect('publish'));
+    const { data: draft } = await call(c, 'start_changeset');
+    const link = await call(c, 'get_upload_link', { changeset_id: draft.changeset_id });
+    expect((await put(`${link.data.upload_url}/antes.png`, PNG)).status).toBe(201);
+    const { rows } = await pool.query(`SELECT grant_id FROM upload_links WHERE draft_id = $1`, [draft.changeset_id]);
+    await pool.query('UPDATE grants SET revoked_at = now() WHERE id = $1', [rows[0].grant_id]);
+    expect((await put(`${link.data.upload_url}/despues.png`, PNG)).status).toBe(404);
+    expect((await get(new URL(link.data.upload_url).pathname)).status).toBe(404);
+    await pool.query('DELETE FROM drafts WHERE id = $1', [draft.changeset_id]);
   });
 
   it('add_attachments points at the upload link when the app gives no download link', async () => {

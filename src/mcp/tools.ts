@@ -150,7 +150,7 @@ const LAYOUT_UNAVAILABLE = 'No se pudo confirmar la estructura del hosting; no s
 
 export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {}): McpServer {
   const server = new McpServer({ name: 'crservers', title: 'CR Servers', version: '0.1.0' }, { instructions: INSTRUCTIONS });
-  const extra = (auth.extra ?? {}) as { siteIds?: string[]; permission?: 'preview' | 'publish' };
+  const extra = (auth.extra ?? {}) as { grantId?: string; siteIds?: string[]; permission?: 'preview' | 'publish' };
 
   const granted = () => deps.sites.byIds(extra.siteIds ?? []);
   const permission = extra.permission === 'publish' ? 'publish' : 'preview';
@@ -483,7 +483,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
     {
       title: 'Get upload link',
       description:
-        `Returns upload_url, a private link (valid 1 hour) that takes photos and other media files into one folder of the draft stored on CR Servers (the live site doesn't change until publish). Use it when the user wants to add files from their device, or attached them in the chat and add_attachments can't read them. Two ways to use it: if you have the file in a code sandbox with network access, upload it yourself with one HTTP PUT per file to upload_url + "/" + file name, the file as the request body (curl -T foto.jpg "<upload_url>/foto.jpg"); otherwise give upload_url to the user, who opens it and picks the files on their phone or computer. Call it again to see what has arrived (uploaded). Media only (images, video, audio, fonts, PDF); each file must really be the type its name says.`,
+        `Returns upload_url, a private link (valid 1 hour) that takes photos and other media files into one folder of the draft stored on CR Servers (the live site doesn't change until publish). Use it when the user wants to add files from their device, or attached them in the chat and add_attachments can't read them. Two ways to use it: if you have the file in a code sandbox with network access, upload it yourself with one HTTP PUT per file to upload_url + "/" + file name, the file as the request body (curl -T foto.jpg "<upload_url>/foto.jpg"); otherwise give upload_url to the user, who opens it and picks the files on their phone or computer. Call it again to see what has arrived (uploaded). Media only (images except SVG, video, audio, fonts, PDF); each file must really be the type its name says.`,
       inputSchema: {
         changeset_id: z.string(),
         folder: z.string().max(200).default('img').describe('Folder in the site where the files go, e.g. "img" or "img/proyectos". To replace an existing photo, use its folder and upload a file with the same name.'),
@@ -493,13 +493,13 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
     },
     (a) =>
       run({ changesetId: a.changeset_id }, async ({ site }) => {
-        if (!deps.uploads) return fail('No disponible. / Not available.');
+        if (!deps.uploads || !extra.grantId) return fail('No disponible. / Not available.');
         const folder = normalizeSiteDir(a.folder);
         const refused = folder ? refuseOtherSites(site, [folder]) : null;
         if (refused) return refused;
         if (folder.split('/').some((seg) => seg.startsWith('.'))) throw new PathError('Hidden folders are not allowed', folder);
         const widths = [...new Set(a.widths ?? [])].sort((x, y) => x - y);
-        const link = await deps.uploads.createLink(a.changeset_id, site.id, folder, widths);
+        const link = await deps.uploads.createLink(a.changeset_id, site.id, extra.grantId, folder, widths);
         const uploaded = await deps.uploads.uploaded(a.changeset_id);
         const where = folder ? `${folder}/` : 'la raíz del sitio / the site root';
         return ok(

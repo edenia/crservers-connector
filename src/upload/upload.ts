@@ -99,14 +99,17 @@ export class UploadService {
 
   constructor(private readonly d: UploadDeps) {}
 
-  /** A new link for the draft, valid for an hour (or until the draft is published, discarded or expires). */
-  async createLink(draftId: string, siteId: string, folder: string, widths: number[] = []): Promise<{ url: string; expiresAt: Date }> {
+  /**
+   * A new link for the draft, valid for an hour, or until the draft is published, discarded or
+   * expires, or the connection that asked for it loses access to the site.
+   */
+  async createLink(draftId: string, siteId: string, grantId: string, folder: string, widths: number[] = []): Promise<{ url: string; expiresAt: Date }> {
     const token = randomToken(24);
     const r = await this.d.pool.query(
-      `INSERT INTO upload_links (token_hash, draft_id, site_id, folder, widths, expires_at)
-       SELECT $1, d.id, d.site_id, $4, $5, LEAST(d.expires_at, now() + make_interval(secs => $6)) FROM drafts d WHERE d.id = $2 AND d.site_id = $3
+      `INSERT INTO upload_links (token_hash, draft_id, site_id, grant_id, folder, widths, expires_at)
+       SELECT $1, d.id, d.site_id, $7, $4, $5, LEAST(d.expires_at, now() + make_interval(secs => $6)) FROM drafts d WHERE d.id = $2 AND d.site_id = $3
        RETURNING expires_at`,
-      [hashToken(token), draftId, siteId, normalizeSiteDir(folder), JSON.stringify(widths), UPLOAD_TTL_S],
+      [hashToken(token), draftId, siteId, normalizeSiteDir(folder), JSON.stringify(widths), UPLOAD_TTL_S, grantId],
     );
     if (!r.rows[0]) throw new Error('draft not found');
     return { url: `${this.d.publicUrl}/upload/${token}`, expiresAt: r.rows[0].expires_at };
@@ -127,6 +130,8 @@ export class UploadService {
     const tokenHash = hashToken(token);
     const r = (await this.d.pool.query(
       `SELECT l.draft_id, l.site_id, l.folder, l.widths, l.files, l.expires_at FROM upload_links l JOIN drafts d ON d.id = l.draft_id
+       JOIN grants g ON g.id = l.grant_id AND g.revoked_at IS NULL
+       JOIN grant_sites gs ON gs.grant_id = l.grant_id AND gs.site_id = l.site_id
        WHERE l.token_hash = $1 AND l.expires_at > now() AND d.expires_at > now()`,
       [tokenHash],
     )).rows[0];
@@ -153,6 +158,8 @@ export class UploadService {
       throw new UploadError(400, (e as Error).message);
     }
     if (t.protectedDirs.some((dir) => path === dir || path.startsWith(`${dir}/`))) throw new UploadError(403, 'That folder belongs to another site in this hosting account');
+    // SVG can carry script, and whoever holds the link is not signed in: the assistant writes SVG with write_files.
+    if (extOf(path) === 'svg') throw new UploadError(415, 'SVG files are not accepted through an upload link; write them with write_files');
     if (data.length > maxFileBytes(path)) throw new UploadError(413, `File too large (max ${maxFileBytes(path) / MB} MB)`);
     try {
       assertMediaMatches(path, data);

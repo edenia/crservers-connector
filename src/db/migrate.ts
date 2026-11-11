@@ -307,6 +307,7 @@ const MIGRATIONS: { id: string; sql: string }[] = [
         token_hash  text PRIMARY KEY,
         draft_id    uuid NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
         site_id     uuid NOT NULL REFERENCES sites(id),
+        grant_id    uuid NOT NULL REFERENCES grants(id) ON DELETE CASCADE,
         folder      text NOT NULL,
         widths      jsonb NOT NULL DEFAULT '[]',
         files       integer NOT NULL DEFAULT 0,

@@ -14,6 +14,7 @@ import { AuditLog, PgBlobStore, PgDraftStore, PgReleaseStore } from './deploy/pg
 import { createApp } from './http.js';
 import { PreviewService } from './preview/preview.js';
 import { ApprovalService } from './approvals/approvals.js';
+import { UploadService } from './upload/upload.js';
 import { SiteRepo } from './sites.js';
 
 const cfg = loadConfig();
@@ -49,9 +50,10 @@ const approvals = new ApprovalService({
   clientAreaUrl: cfg.CLIENT_AREA_URL, reqKey: fromB64url(cfg.REQ_KEY), publicUrl: cfg.PUBLIC_URL,
 });
 const clientApi = { pool, sites, audit, appName, reqKey: fromB64url(cfg.REQ_KEY), removeSite: (grantId: string, siteId: string) => provider.removeSite(grantId, siteId) };
-const mcp = { core, sites, preview, approvals, audit, openFs, appName, layout, support };
+const uploads = new UploadService({ pool, sites, core, openFs, publicUrl: cfg.PUBLIC_URL });
+const mcp = { core, sites, preview, approvals, uploads, audit, openFs, appName, layout, support };
 
-const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp, preview, approvals, clientApi, openaiAppsChallenge: cfg.OPENAI_APPS_CHALLENGE, events: { pool, sites, reqKey: fromB64url(cfg.REQ_KEY) } });
+const app = createApp({ provider, issuer: cfg.PUBLIC_URL, mcpUrl: cfg.mcpUrl, mcp, preview, approvals, uploads, clientApi, openaiAppsChallenge: cfg.OPENAI_APPS_CHALLENGE, events: { pool, sites, reqKey: fromB64url(cfg.REQ_KEY) } });
 const server = app.listen(cfg.PORT, () => console.log(`crservers-connector listening on :${cfg.PORT} (${cfg.PUBLIC_URL})`));
 
 for (const sig of ['SIGTERM', 'SIGINT'] as const) {

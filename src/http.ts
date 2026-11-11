@@ -6,6 +6,7 @@ import { mcpHandler, mcpMethodNotAllowed } from './mcp/handler.js';
 import type { McpDeps } from './mcp/tools.js';
 import type { PreviewService } from './preview/preview.js';
 import type { ApprovalService } from './approvals/approvals.js';
+import type { UploadService } from './upload/upload.js';
 import { clientAreaEvents } from './auth/events.js';
 import { clientAreaApi, type ClientApiDeps } from './auth/clientapi.js';
 import type { SiteRepo } from './sites.js';
@@ -32,10 +33,12 @@ export interface AppDeps {
   mcp: McpDeps;
   /** OpenAI apps directory domain verification token (empty = 404). */
   openaiAppsChallenge?: string;
-  /** Tests only: false turns off the per-IP client registration limit. */
-  registrationRateLimit?: false;
+  /** Tests only: false turns off the per-IP client registration and token limits. */
+  rateLimits?: false;
   preview: PreviewService;
   approvals: ApprovalService;
+  /** Upload links for drafts (src/upload/upload.ts). */
+  uploads?: UploadService;
   /** Data for the client area's AI Connect page (signed with REQ_KEY). */
   clientApi?: ClientApiDeps;
   /** Lifecycle events from the client area (signed with REQ_KEY). */
@@ -61,8 +64,8 @@ export function createApp(d: AppDeps): Express {
           t: new Date().toISOString(),
           m: req.method,
           // originalUrl keeps the mount path (req.path is relative inside the SDK's routers); drop the query.
-          // Preview tokens are bearer secrets: never log them.
-          p: req.originalUrl.split('?')[0]!.replace(/^\/p\/[^/]+/, '/p/:token'),
+          // Preview and upload tokens are bearer secrets: never log them (nor the uploaded file's name).
+          p: req.originalUrl.split('?')[0]!.replace(/^\/p\/[^/]+/, '/p/:token').replace(/^\/upload\/[^/]+(\/.*)?$/, (_m, file) => `/upload/:token${file ? '/:file' : ''}`),
           s: res.statusCode,
           ms: Number((process.hrtime.bigint() - start) / 1_000_000n),
           ua: (req.get('user-agent') ?? '').slice(0, 80),
@@ -106,8 +109,8 @@ export function createApp(d: AppDeps): Express {
 
   app.use(mcpAuthRouter({
     provider: d.provider, issuerUrl, resourceServerUrl, scopesSupported: SCOPES_SUPPORTED, resourceName: 'CR Servers',
-    // Production keeps the SDK's per-IP limit (20 registrations/hour); the test suite registers more than that.
-    ...(d.registrationRateLimit === false ? { clientRegistrationOptions: { rateLimit: false as const } } : {}),
+    // Production keeps the SDK's per-IP limits (20 registrations/hour, 50 token requests/15 min); the test suite goes past both.
+    ...(d.rateLimits === false ? { clientRegistrationOptions: { rateLimit: false as const }, tokenOptions: { rateLimit: false as const } } : {}),
   }));
 
   // One callback for both client-area round trips: new connections and approval sign-ins.
@@ -142,6 +145,14 @@ export function createApp(d: AppDeps): Express {
   app.use('/p', (req, res, next) => {
     d.preview.handle(req, res).catch(next);
   });
+
+  // Upload links: media files into one draft, token in the path (src/upload/upload.ts).
+  if (d.uploads) {
+    const uploads = d.uploads;
+    app.use('/upload', (req, res, next) => {
+      uploads.handle(req, res).catch(next);
+    });
+  }
 
   // The directories (Claude, ChatGPT) load these from other origins, so allow cross-origin use.
   app.get(['/icon.png', '/favicon.ico'], (_req, res) => {

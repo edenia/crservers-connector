@@ -85,6 +85,7 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | `list_sites`, `get_site_info`, `get_usage_limits` | The connected site, its permission and limits |
 | `list_files`, `read_file` | Browse and read (paged for large files) the live site or a draft |
 | `start_changeset`, `write_files`, `edit_file`, `delete_files`, `discard_changeset` | Work in a draft |
+| `add_attachments`, `get_upload_link`, `import_from_url` | Bring photos and other media into a draft: attached in the chat (ChatGPT), sent by the assistant or uploaded by the owner through a private one-hour link (Claude and others), or from a public link |
 | `preview_changeset` | What will change, plus the conflict check (required before publishing) |
 | `publish`, `list_releases`, `revert_release` | Go live, see history, undo |
 | `get_activity_log` | Who changed what, and when |

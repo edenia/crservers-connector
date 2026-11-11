@@ -36,6 +36,7 @@ export async function cleanup(pool: Pool): Promise<CleanupCounts> {
       await run('manage_sessions', `DELETE FROM manage_sessions WHERE expires_at < now() - interval '1 day'`);
       await run('client_area_events', `DELETE FROM client_area_events WHERE received_at < now() - interval '1 day'`);
       await run('preview_links', `DELETE FROM preview_links WHERE expires_at < now()`);
+      await run('upload_links', `DELETE FROM upload_links WHERE expires_at < now()`);
       // Expired drafts (their staged files and preview links go with them).
       await run('drafts', `DELETE FROM drafts WHERE expires_at < now()`);
       // Tokens: expired ones are dead weight.

@@ -299,6 +299,31 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       ALTER TABLE support_events ADD CONSTRAINT support_events_kind_check CHECK (kind IN ('tool_call', 'initialize', 'connect_refused', 'refresh_refused'));
     `,
   },
+  {
+    // Upload links (src/upload/upload.ts): private, short-lived links that take media files into one draft.
+    id: '014_upload_links',
+    sql: `
+      CREATE TABLE upload_links (
+        token_hash  text PRIMARY KEY,
+        draft_id    uuid NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+        site_id     uuid NOT NULL REFERENCES sites(id),
+        grant_id    uuid NOT NULL REFERENCES grants(id) ON DELETE CASCADE,
+        folder      text NOT NULL,
+        widths      jsonb NOT NULL DEFAULT '[]',
+        files       integer NOT NULL DEFAULT 0,
+        created_at  timestamptz NOT NULL DEFAULT now(),
+        expires_at  timestamptz NOT NULL
+      );
+      CREATE INDEX upload_links_draft ON upload_links (draft_id);
+
+      CREATE TABLE upload_files (
+        draft_id  uuid NOT NULL REFERENCES drafts(id) ON DELETE CASCADE,
+        path      text NOT NULL,
+        at        timestamptz NOT NULL DEFAULT now(),
+        PRIMARY KEY (draft_id, path)
+      );
+    `,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import { MB, assertContentAllowed, assertWritable, isSecretPath, isTextPath, maxFileBytes, normalizeSiteDir, normalizeSitePath } from './paths.js';
 import { baseOf, dirOf, type SiteEntry, type SiteFs } from './sitefs.js';
 import { HOME_PAGES, isSkeletonPath, matchesSkeleton } from './skeleton.js';
-import type { BlobStore, Draft, DraftStore, Release, ReleaseFile, ReleaseStore } from './stores.js';
+import type { BlobStore, Draft, DraftChange, DraftInfo, DraftStore, Release, ReleaseFile, ReleaseStore } from './stores.js';
 
 /**
  * Deploy core (docs/ARCHITECTURE.md, "Publishing"): drafts, preview gate, conflict check, revert records,
@@ -69,6 +69,55 @@ export interface PreviewSummary {
   conflicts: string[];
   /** The hosting's placeholder files this draft removes (also in `deleted`); see skeleton.ts. */
   placeholders: string[];
+  /** Paths changed since the previous preview of this draft (empty on the first one). */
+  changedSincePreview: ChangedFile[];
+  /** How many of the draft's files each source changed last ("Claude": 12, "upload link": 3). */
+  changedBy: Record<string, number>;
+}
+
+export interface ChangedFile {
+  path: string;
+  at: string;
+  by: string;
+  /** The file was taken out of the draft (it existed only there). */
+  removed_from_draft?: true;
+}
+
+/** Default source of a change when the caller names none. */
+export const BY_ASSISTANT = 'assistant';
+/** Source of the placeholder deletions the preview plans itself (skeleton.ts). */
+export const BY_SERVER = 'CR Servers';
+/** Source of files that arrive through an upload link (src/upload/upload.ts). */
+export const BY_UPLOAD_LINK = 'upload link';
+
+/** Paths of a draft changed after the version it was last previewed at, newest first. */
+function changedAfter(d: Pick<Draft, 'changes'>, version: number | null): ChangedFile[] {
+  if (version === null) return [];
+  return [...d.changes]
+    .filter(([, c]) => c.v > version)
+    .sort((a, b) => b[1].v - a[1].v || a[0].localeCompare(b[0]))
+    .map(([path, c]) => ({ path, at: c.at, by: c.by, ...(c.gone ? { removed_from_draft: true as const } : {}) }));
+}
+
+/** Files the draft holds, per source. A Map does the counting: a source can be named "constructor". */
+function countBy(changes: Map<string, DraftChange>): Record<string, number> {
+  const n = new Map<string, number>();
+  for (const c of held(changes)) n.set(c.by, (n.get(c.by) ?? 0) + 1);
+  return Object.fromEntries(n);
+}
+
+/** Records of the paths the draft still holds (not the ones that left it). */
+function held(changes: Map<string, DraftChange>): DraftChange[] {
+  return [...changes.values()].filter((c) => !c.gone);
+}
+
+/** One sentence for the publish refusal: what changed after the preview the user saw. */
+export function stalePreviewMessage(changed: ChangedFile[]): string {
+  if (!changed.length) return 'Preview the draft in its current form before publishing';
+  const names = changed.slice(0, 8).map((c) => c.path).join(', ');
+  const more = changed.length > 8 ? ` and ${changed.length - 8} more` : '';
+  const by = [...new Set(changed.map((c) => c.by))].join(', ');
+  return `The draft changed after the last preview: ${changed.length} file(s) (${names}${more}), last change at ${changed[0]!.at} by ${by}. If you did not make these changes, another chat or the upload link did: tell the user. Run preview_changeset again, show the user the new summary and link, and publish only after they confirm`;
 }
 
 const READ_TEXT_LIMIT = 1 * MB;
@@ -127,9 +176,23 @@ export class DeployCore {
       startFingerprints: new Map(live.map((e) => [e.path, fingerprint(e)])),
       earlyConflicts: new Set(),
       skeletonDeletes: new Set(),
+      changes: new Map(),
     };
     await this.drafts.put(draft);
     return draft;
+  }
+
+  /** Open drafts of a site, newest first, with who changed what (activity log). */
+  async openDrafts(siteId: string): Promise<{ id: string; createdAt: Date; expiresAt: Date; files: number; lastChangeAt: string | null; changedBy: Record<string, number> }[]> {
+    const drafts: DraftInfo[] = await this.drafts.openBySite(siteId, this.now());
+    return drafts.map((d) => ({
+      id: d.id,
+      createdAt: d.createdAt,
+      expiresAt: d.expiresAt,
+      files: held(d.changes).length,
+      lastChangeAt: [...d.changes.values()].map((c) => c.at).sort().at(-1) ?? null,
+      changedBy: countBy(d.changes),
+    }));
   }
 
   /** Which site a draft belongs to (undefined when unknown). Callers still pass that site to every method. */
@@ -169,12 +232,14 @@ export class DeployCore {
     return n;
   }
 
-  async writeFiles(draftId: string, siteId: string, fs: SiteFs, files: FileInput[]): Promise<{ path: string; ok: boolean; error?: string }[]> {
-    return this.withDraftLock(draftId, () => this.writeFilesNow(draftId, siteId, fs, files));
+  /** `by`: who makes the change (the app's name, or BY_UPLOAD_LINK), kept per file for the preview and the activity log. */
+  async writeFiles(draftId: string, siteId: string, fs: SiteFs, files: FileInput[], by = BY_ASSISTANT): Promise<{ path: string; ok: boolean; error?: string }[]> {
+    return this.withDraftLock(draftId, () => this.writeFilesNow(draftId, siteId, fs, files, by));
   }
 
-  private async writeFilesNow(draftId: string, siteId: string, fs: SiteFs, files: FileInput[]): Promise<{ path: string; ok: boolean; error?: string }[]> {
+  private async writeFilesNow(draftId: string, siteId: string, fs: SiteFs, files: FileInput[], by: string): Promise<{ path: string; ok: boolean; error?: string }[]> {
     const d = await this.getDraft(draftId, siteId);
+    const change: DraftChange = { v: d.version + 1, at: this.now().toISOString(), by };
     const results: { path: string; ok: boolean; error?: string }[] = [];
     for (const f of files) {
       let path = f.path;
@@ -190,6 +255,7 @@ export class DeployCore {
         d.writes.set(path, f.content);
         d.deletes.delete(path);
         d.skeletonDeletes.delete(path);
+        d.changes.set(path, change);
         results.push({ path, ok: true });
       } catch (e) {
         results.push({ path, ok: false, error: (e as Error).message });
@@ -200,12 +266,13 @@ export class DeployCore {
     return results;
   }
 
-  async deleteFiles(draftId: string, siteId: string, fs: SiteFs, paths: string[]): Promise<{ path: string; ok: boolean; error?: string }[]> {
-    return this.withDraftLock(draftId, () => this.deleteFilesNow(draftId, siteId, fs, paths));
+  async deleteFiles(draftId: string, siteId: string, fs: SiteFs, paths: string[], by = BY_ASSISTANT): Promise<{ path: string; ok: boolean; error?: string }[]> {
+    return this.withDraftLock(draftId, () => this.deleteFilesNow(draftId, siteId, fs, paths, by));
   }
 
-  private async deleteFilesNow(draftId: string, siteId: string, fs: SiteFs, paths: string[]): Promise<{ path: string; ok: boolean; error?: string }[]> {
+  private async deleteFilesNow(draftId: string, siteId: string, fs: SiteFs, paths: string[], by: string): Promise<{ path: string; ok: boolean; error?: string }[]> {
     const d = await this.getDraft(draftId, siteId);
+    const change: DraftChange = { v: d.version + 1, at: this.now().toISOString(), by };
     const results: { path: string; ok: boolean; error?: string }[] = [];
     for (const raw of paths) {
       let path = raw;
@@ -218,6 +285,8 @@ export class DeployCore {
         d.writes.delete(path);
         if (existsLive) d.deletes.add(path);
         d.skeletonDeletes.delete(path);
+        // A file that existed only in the draft leaves it; a live one stays as a deletion.
+        d.changes.set(path, existsLive ? change : { ...change, gone: true });
         results.push({ path, ok: true });
       } catch (e) {
         results.push({ path, ok: false, error: (e as Error).message });
@@ -311,12 +380,12 @@ export class DeployCore {
   }
 
   /** What a draft changes, without side effects (approval rules look at this before publishing). */
-  async summary(draftId: string, siteId: string): Promise<{ added: string[]; modified: string[]; deleted: string[]; version: number; previewed: boolean; expiresAt: Date }> {
+  async summary(draftId: string, siteId: string): Promise<{ added: string[]; modified: string[]; deleted: string[]; version: number; previewed: boolean; changedSincePreview: ChangedFile[]; expiresAt: Date }> {
     const d = await this.getDraft(draftId, siteId);
     const added: string[] = [];
     const modified: string[] = [];
     for (const p of d.writes.keys()) (d.base.get(p) === null ? added : modified).push(p);
-    return { added: added.sort(), modified: modified.sort(), deleted: [...d.deletes].sort(), version: d.version, previewed: d.previewedVersion === d.version, expiresAt: d.expiresAt };
+    return { added: added.sort(), modified: modified.sort(), deleted: [...d.deletes].sort(), version: d.version, previewed: d.previewedVersion === d.version, changedSincePreview: changedAfter(d, d.previewedVersion), expiresAt: d.expiresAt };
   }
 
   /** Marks the current draft version as previewed. Scans and the preview site are added by callers. */
@@ -331,9 +400,10 @@ export class DeployCore {
     const added: string[] = [];
     const modified: string[] = [];
     for (const p of d.writes.keys()) (d.base.get(p) === null ? added : modified).push(p);
+    const changedSincePreview = changedAfter(d, d.previewedVersion);
     d.previewedVersion = d.version;
     await this.drafts.put(d);
-    return { added: added.sort(), modified: modified.sort(), deleted: [...d.deletes].sort(), conflicts, placeholders: [...d.skeletonDeletes].sort() };
+    return { added: added.sort(), modified: modified.sort(), deleted: [...d.deletes].sort(), conflicts, placeholders: [...d.skeletonDeletes].sort(), changedSincePreview, changedBy: countBy(d.changes) };
   }
 
   /**
@@ -344,16 +414,23 @@ export class DeployCore {
    */
   private async planSkeletonCleanup(d: Draft, fs: SiteFs): Promise<boolean> {
     const before = [...d.skeletonDeletes].sort().join('\n');
+    const planned = new Map<string, DraftChange>();
     for (const p of d.skeletonDeletes) {
       d.deletes.delete(p);
       d.base.delete(p);
       d.earlyConflicts.delete(p);
+      const c = d.changes.get(p);
+      if (c) planned.set(p, c);
+      d.changes.delete(p);
     }
     d.skeletonDeletes.clear();
+    // The caller bumps the version when the plan changed, so a newly planned deletion belongs to the next one.
+    const change: DraftChange = { v: d.version + 1, at: this.now().toISOString(), by: BY_SERVER };
     for (const [p, hash] of await this.skeletonToRemove(d, fs)) {
       await this.touch(d, fs, p, hash);
       d.deletes.add(p);
       d.skeletonDeletes.add(p);
+      d.changes.set(p, planned.get(p) ?? change);
     }
     return [...d.skeletonDeletes].sort().join('\n') !== before;
   }
@@ -382,7 +459,7 @@ export class DeployCore {
       const d = await this.getDraft(draftId, siteId);
       if (expectedVersion !== undefined && d.version !== expectedVersion) throw new DeployError('not_previewed', 'The draft changed after approval was requested');
       if (d.writes.size === 0 && d.deletes.size === 0) throw new DeployError('invalid', 'Nothing to publish');
-      if (d.previewedVersion !== d.version) throw new DeployError('not_previewed', 'Preview the draft in its current form before publishing');
+      if (d.previewedVersion !== d.version) throw new DeployError('not_previewed', stalePreviewMessage(changedAfter(d, d.previewedVersion)));
       refuseBlocked([...d.writes.keys(), ...d.deletes], blocked);
       const { conflicts, live } = await this.conflicts(d, fs);
       if (conflicts.length) throw new DeployError('conflict', 'The live site changed since the draft read these files', conflicts);

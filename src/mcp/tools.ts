@@ -2,7 +2,7 @@ import { newRef } from '../crypto.js';
 import type { SupportLog } from '../db/support.js';
 import { McpServer, type AuthInfo, type CallToolResult, type ListToolsResult } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { DeployCore, DeployError } from '../deploy/core.js';
+import { BY_ASSISTANT, BY_SERVER, BY_UPLOAD_LINK, DeployCore, DeployError, stalePreviewMessage } from '../deploy/core.js';
 import { ImportError, assertMediaMatches, fetchPublicUrl, type UrlFetcher } from '../deploy/fetchurl.js';
 import { MB, PathError, SITE_GUIDE_MAX_BYTES, maxFileBytes, normalizeSiteDir, normalizeSitePath } from '../deploy/paths.js';
 import { isSkeletonPath } from '../deploy/skeleton.js';
@@ -66,7 +66,7 @@ const MAX_CALL_FILES = 50;
 const READ_PAGE = 20_000;
 const SECRET_NOTE = 'Este archivo puede contener contraseñas o claves: no se muestra ni se puede cambiar desde aquí. / This file may hold passwords or keys: its content isn\'t shown and it can\'t be changed from here.';
 
-type Ctx = { site: Site; permission: 'preview' | 'publish'; clientId: string };
+type Ctx = { site: Site; permission: 'preview' | 'publish'; clientId: string; /** The app's name ("Claude"), recorded as the author of draft changes. Looked up only by the tools that write. */ by: () => Promise<string> };
 /** Which site a tool call works on: a draft's, or a domain the AI named. */
 type SitePick = { changesetId?: string; site?: string };
 
@@ -102,6 +102,25 @@ function publicDetail(d: Record<string, unknown>): Record<string, unknown> {
   if (d.approved_in_browser) out.approved_in_browser = true;
   if (typeof d.approve_every_publish === 'boolean') out.approve_every_publish = d.approve_every_publish;
   return out;
+}
+
+/**
+ * The app's name as the source of a draft change. The name comes from the app's own registration and
+ * ends up in tool output that an assistant reads, so it is reduced to a short plain label: ASCII letters
+ * (no look-alike characters from other alphabets), digits, spaces, dots and hyphens, on one line. It can't pass for a source the server itself names.
+ */
+export function sourceLabel(name: string): string {
+  const label = name.normalize('NFKC').replace(/[^A-Za-z0-9 .-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40).trim() || 'app';
+  return [BY_UPLOAD_LINK, BY_ASSISTANT, BY_SERVER.toLowerCase()].includes(label.toLowerCase()) ? `app ${label}` : label;
+}
+
+/** How many changed files a preview lists by name. */
+const CHANGED_LIST_MAX = 60;
+
+/** Output text for preview_changeset when the draft changed since its previous preview. */
+function changedNote(changed: { path: string; at: string; by: string }[]): string {
+  const by = [...new Set(changed.map((c) => c.by))].join(', ');
+  return `Desde la vista previa anterior cambiaron ${changed.length} archivo(s) (por: ${by}). Si alguno no lo cambió usted en este chat, lo hizo otro chat o el enlace de carga: dígaselo al usuario antes de publicar. / ${changed.length} file(s) changed since the previous preview (by: ${by}); see changed_since_last_preview. If you did not change some of them in this chat, another chat or the upload link did: tell the user before publishing.`;
 }
 
 /** Output text for preview_changeset when the draft also removes the hosting's placeholder files. */
@@ -144,7 +163,7 @@ const NO_ATTACHMENT =
   'No se pudo leer el archivo adjunto: esta app no entrega al conector los archivos del chat. Use get_upload_link (usted mismo sube el archivo desde su entorno de código, o el usuario lo sube desde su dispositivo), o import_from_url si el archivo está en un enlace público. / Could not read the attached file: this app does not hand chat attachments to the connector. Use get_upload_link instead (upload the file yourself from your code sandbox, or let the user upload it from their device), or import_from_url when the file is at a public link.';
 
 const UPLOAD_HOW_TO =
-  'How to use it. (1) The user attached the file in this chat and you can run code with network access: upload it yourself, one request per file: curl -sS -T foto.jpg "<upload_url>/foto.jpg". The answer is JSON with the path it got in the draft. Resize photos first (2000 px on the long side at most, JPEG quality around 78) and use short lowercase names; a file with the same name as an existing one replaces it in the draft. If the request is blocked (no network access to this host), use (2). (2) Give the user upload_url: they open it, pick the files on their phone or computer, and tell you when they are done; the page resizes photos for them and never replaces an existing file (it adds -2 to the name). Then call get_upload_link again, or list_files with changeset_id, to see the paths, and continue with the edit and preview_changeset. Never ask the user to open the link when you can upload the file yourself.';
+  'How to use it. (1) The user attached the file in this chat and you can run code with network access: upload it yourself, one request per file: curl -sS -T foto.jpg "<upload_url>/foto.jpg". The answer is JSON with the path it got in the draft. Resize photos first (2000 px on the long side at most, JPEG quality around 78) and use short lowercase names. The copies for srcset are made only by the page in (2), so when the pages of the site use them (foto-800.jpg, foto-1200.jpg, foto-1600.jpg next to foto.jpg; check an existing page or the site guide) make them yourself at those widths and upload them too, never wider than the photo; a file with the same name as an existing one replaces it in the draft. If the request is blocked (no network access to this host), use (2). (2) Give the user upload_url: they open it, pick the files on their phone or computer, and tell you when they are done; the page resizes photos for them and never replaces an existing file (it adds -2 to the name). Then call get_upload_link again, or list_files with changeset_id, to see the paths, and continue with the edit and preview_changeset. Never ask the user to open the link when you can upload the file yourself.';
 
 const LAYOUT_UNAVAILABLE = 'No se pudo confirmar la estructura del hosting; no se cambió nada. Intente de nuevo en unos minutos. / Could not confirm the hosting layout; nothing changed. Try again in a few minutes.';
 
@@ -178,7 +197,9 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
     const held: { fs?: SiteFs } = {};
     const fs = async () => (held.fs ??= await deps.openFs(current.id));
     try {
-      return await fn({ site: current, permission, clientId: auth.clientId }, fs);
+      let label: Promise<string> | undefined;
+      const by = () => (label ??= (deps.appName ? deps.appName(auth.clientId).catch(() => auth.clientId) : Promise.resolve(auth.clientId)).then(sourceLabel));
+      return await fn({ site: current, permission, clientId: auth.clientId, by }, fs);
     } catch (e) {
       const ref = (trace.ref = newRef());
       const failRef = (message: string, data?: Record<string, unknown>) => fail(`${message} (ref: ${ref})`, data);
@@ -339,7 +360,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
       annotations: DRAFT,
     },
     (a) =>
-      run({ changesetId: a.changeset_id }, async ({ site }, fs) => {
+      run({ changesetId: a.changeset_id }, async ({ site, by }, fs) => {
         const refused = refuseOtherSites(site, [a.path]);
         if (refused) return refused;
         const f = await fs();
@@ -353,7 +374,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
           if (n !== 1) return fail(`Edición ${i + 1}: el texto buscado aparece ${n} veces; debe aparecer exactamente 1. / Edit ${i + 1}: old_text found ${n} times, must be exactly 1.`);
           text = text.replace(e.old_text, () => e.new_text ?? '');
         }
-        const [res] = await deps.core.writeFiles(a.changeset_id, site.id, f, [{ path: cur.path, content: Buffer.from(text, 'utf8') }]);
+        const [res] = await deps.core.writeFiles(a.changeset_id, site.id, f, [{ path: cur.path, content: Buffer.from(text, 'utf8') }], await by());
         if (!res?.ok) return fail(res?.error ?? 'No se pudo editar. / Edit failed.');
         const after = await deps.core.readFile(site.id, f, cur.path, a.changeset_id);
         return ok(`${a.edits.length} cambio(s) en ${cur.path} (borrador). / ${a.edits.length} edit(s) staged.`, { path: cur.path, size: after.size, hash: after.hash });
@@ -397,13 +418,13 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
       annotations: DRAFT,
     },
     (a) =>
-      run({ changesetId: a.changeset_id }, async ({ site }, fs) => {
+      run({ changesetId: a.changeset_id }, async ({ site, by }, fs) => {
         const refused = refuseOtherSites(site, a.files.map((f) => f.path));
         if (refused) return refused;
         const files = a.files.map((f) => ({ path: f.path, content: Buffer.from(f.content, f.encoding), baseHash: f.base_hash }));
         const total = files.reduce((n, f) => n + f.content.length, 0);
         if (total > MAX_CALL_BYTES) return fail(`Demasiado grande para una llamada (${(total / MB).toFixed(1)} MB). Divida en varias llamadas. / Too large for one call; split it.`);
-        const results = await deps.core.writeFiles(a.changeset_id, site.id, await fs(), files);
+        const results = await deps.core.writeFiles(a.changeset_id, site.id, await fs(), files, await by());
         const okCount = results.filter((r) => r.ok).length;
         return ok(`${okCount} de ${results.length} archivos en el borrador. / ${okCount} of ${results.length} files staged.`, { results });
       })(),
@@ -423,13 +444,13 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
       annotations: { ...DRAFT, openWorldHint: true },
     },
     (a) =>
-      run({ changesetId: a.changeset_id }, async ({ site }, fs) => {
+      run({ changesetId: a.changeset_id }, async ({ site, by }, fs) => {
         const refused = refuseOtherSites(site, [a.path]);
         if (refused) return refused;
         const path = normalizeSitePath(a.path);
         const dl = await (deps.fetchUrl ?? fetchPublicUrl)(a.url, maxFileBytes(path));
         assertMediaMatches(path, dl.data);
-        const [res] = await deps.core.writeFiles(a.changeset_id, site.id, await fs(), [{ path, content: dl.data }]);
+        const [res] = await deps.core.writeFiles(a.changeset_id, site.id, await fs(), [{ path, content: dl.data }], await by());
         if (!res?.ok) return fail(res?.error ?? 'No se pudo agregar. / Could not stage the file.');
         return ok(`${path} agregado al borrador (${(dl.data.length / 1024).toFixed(0)} KB). / Staged ${path}.`, { path, size: dl.data.length, content_type: dl.contentType });
       })(),
@@ -454,7 +475,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
       },
     },
     (a) =>
-      run({ changesetId: a.changeset_id }, async ({ site }, fs) => {
+      run({ changesetId: a.changeset_id }, async ({ site, by }, fs) => {
         const refused = refuseOtherSites(site, a.paths);
         if (refused) return refused;
         if (a.files.length !== a.paths.length) return fail('Indique una ruta por archivo. / Give one path per file.');
@@ -465,7 +486,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
           if (!/^https?:\/\/\S+$/i.test(file.download_url.trim())) return fail(NO_ATTACHMENT, { path, added, use_instead: ['get_upload_link', 'import_from_url'] });
           const dl = await (deps.fetchUrl ?? fetchPublicUrl)(file.download_url.trim(), maxFileBytes(path));
           assertMediaMatches(path, dl.data);
-          const [res] = await deps.core.writeFiles(a.changeset_id, site.id, await fs(), [{ path, content: dl.data }]);
+          const [res] = await deps.core.writeFiles(a.changeset_id, site.id, await fs(), [{ path, content: dl.data }], await by());
           if (!res?.ok) return fail(res?.error ?? 'No se pudo agregar. / Could not stage the file.', { path, added });
           added.push({ path, size: dl.data.length });
         }
@@ -518,10 +539,10 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
     'delete_files',
     { title: 'Delete files in draft', description: 'Marks files for deletion and saves that to the draft stored on CR Servers. The files are deleted from the live site only when the draft is published.', inputSchema: { changeset_id: z.string(), paths: z.array(z.string()).min(1).max(500) }, annotations: DRAFT },
     (a) =>
-      run({ changesetId: a.changeset_id }, async ({ site }, fs) => {
+      run({ changesetId: a.changeset_id }, async ({ site, by }, fs) => {
         const refused = refuseOtherSites(site, a.paths);
         if (refused) return refused;
-        const results = await deps.core.deleteFiles(a.changeset_id, site.id, await fs(), a.paths);
+        const results = await deps.core.deleteFiles(a.changeset_id, site.id, await fs(), a.paths, await by());
         return ok(`${results.filter((r) => r.ok).length} marcados para borrar. / marked for deletion.`, { results });
       })(),
   );
@@ -537,11 +558,15 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
     },
     (a) =>
       run({ changesetId: a.changeset_id }, async ({ site }, fs) => {
-        const { placeholders, ...s } = await deps.core.preview(a.changeset_id, site.id, await fs());
+        const { placeholders, changedSincePreview, changedBy, ...s } = await deps.core.preview(a.changeset_id, site.id, await fs());
         const line = `${s.added.length} nuevos, ${s.modified.length} modificados, ${s.deleted.length} borrados${s.conflicts.length ? `, ${s.conflicts.length} en conflicto` : ''}.`;
         const link = deps.preview ? await deps.preview.createLink(a.changeset_id, site.id) : undefined;
-        return ok(`${line} / ${s.added.length} added, ${s.modified.length} modified, ${s.deleted.length} deleted.${link ? `\nVista previa / Preview: ${link.url}` : ''}${placeholders.length ? `\n\n${placeholderNote(placeholders)}` : ''}`, {
+        return ok(`${line} / ${s.added.length} added, ${s.modified.length} modified, ${s.deleted.length} deleted.${link ? `\nVista previa / Preview: ${link.url}` : ''}${placeholders.length ? `\n\n${placeholderNote(placeholders)}` : ''}${changedSincePreview.length ? `\n\n${changedNote(changedSincePreview)}` : ''}`, {
           ...s,
+          // Who changed the draft's files last, and what changed since the previous preview: a draft can be
+          // written by several chats and by the upload link, and the user approves what the preview showed.
+          changed_by: changedBy,
+          ...(changedSincePreview.length ? { changed_since_last_preview: changedSincePreview.slice(0, CHANGED_LIST_MAX), changed_since_last_preview_total: changedSincePreview.length } : {}),
           ...(placeholders.length ? { placeholder_files_removed: placeholders } : {}),
           ready_to_publish: s.conflicts.length === 0,
           ...(link ? { preview_url: link.url, preview_expires_at: link.expiresAt } : {}),
@@ -573,7 +598,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
             });
           }
           const s = await deps.core.summary(a.changeset_id, site.id);
-          if (!s.previewed) throw new DeployError('not_previewed', 'Preview the draft in its current form before publishing');
+          if (!s.previewed) throw new DeployError('not_previewed', stalePreviewMessage(s.changedSincePreview));
           const blocked = refuseOtherSites(fresh, [...s.added, ...s.modified, ...s.deleted]);
           if (blocked) return blocked;
           const reasons = approvalReasons(s, site);
@@ -643,7 +668,13 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
         const events = await deps.audit.recent(site.id, a.limit);
         const names = new Map<string, string>();
         for (const e of events) if (!names.has(e.clientId)) names.set(e.clientId, deps.appName ? await deps.appName(e.clientId) : e.clientId);
-        return ok(`${events.length} eventos.`, { events: events.map((e) => ({ when: e.at, action: e.action, by_app: e.clientId === 'owner' ? 'site owner' : names.get(e.clientId), ...publicDetail(e.detail) })) });
+        // Drafts in progress: edits are not events (one session makes dozens), so they show here,
+        // with who changed how many files. Several chats can write to one draft.
+        const drafts = await deps.core.openDrafts(site.id);
+        return ok(`${events.length} eventos${drafts.length ? `, ${drafts.length} borrador(es) abierto(s) / open draft(s)` : ''}.`, {
+          events: events.map((e) => ({ when: e.at, action: e.action, by_app: e.clientId === 'owner' ? 'site owner' : names.get(e.clientId), ...publicDetail(e.detail) })),
+          open_drafts: drafts.map((d) => ({ started: d.createdAt, expires_at: d.expiresAt, files_changed: d.files, last_change: d.lastChangeAt, changed_by: d.changedBy })),
+        });
       })(),
   );
 

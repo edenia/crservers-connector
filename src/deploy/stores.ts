@@ -24,6 +24,24 @@ export interface Draft {
   earlyConflicts: Set<string>;
   /** Hosting placeholder files the preview added to `deletes` (skeleton.ts); recomputed on every preview. */
   skeletonDeletes: Set<string>;
+  /** Last change of each path the draft holds: the draft version it made, when, and who (app name, or the upload link). */
+  changes: Map<string, DraftChange>;
+}
+
+export interface DraftChange {
+  v: number;
+  at: string;
+  by: string;
+  /** The path left the draft (a file that existed only in the draft was deleted): kept so the next preview can say so. */
+  gone?: true;
+}
+
+/** An open draft without its files (activity log). */
+export interface DraftInfo {
+  id: string;
+  createdAt: Date;
+  expiresAt: Date;
+  changes: Map<string, DraftChange>;
 }
 
 export interface ReleaseFile {
@@ -53,6 +71,8 @@ export interface DraftStore {
   siteOf(id: string): Promise<string | undefined>;
   put(draft: Draft): Promise<void>;
   delete(id: string): Promise<void>;
+  /** Drafts of a site that have not expired, newest first. */
+  openBySite(siteId: string, now: Date): Promise<DraftInfo[]>;
 }
 
 export interface ReleaseStore {
@@ -82,6 +102,12 @@ export class MemoryDraftStore implements DraftStore {
   }
   async delete(id: string) {
     this.drafts.delete(id);
+  }
+  async openBySite(siteId: string, now: Date) {
+    return [...this.drafts.values()]
+      .filter((d) => d.siteId === siteId && d.expiresAt > now)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+      .map((d) => ({ id: d.id, createdAt: d.createdAt, expiresAt: d.expiresAt, changes: new Map(d.changes) }));
   }
 }
 

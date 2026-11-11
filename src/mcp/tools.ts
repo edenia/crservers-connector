@@ -106,11 +106,11 @@ function publicDetail(d: Record<string, unknown>): Record<string, unknown> {
 
 /**
  * The app's name as the source of a draft change. The name comes from the app's own registration and
- * ends up in tool output that an assistant reads, so it is reduced to a short plain label: letters,
- * digits, spaces, dots and hyphens, on one line. It can't pass for a source the server itself names.
+ * ends up in tool output that an assistant reads, so it is reduced to a short plain label: ASCII letters
+ * (no look-alike characters from other alphabets), digits, spaces, dots and hyphens, on one line. It can't pass for a source the server itself names.
  */
 export function sourceLabel(name: string): string {
-  const label = name.normalize('NFKC').replace(/[^\p{L}\p{N} .-]+/gu, ' ').replace(/\s+/g, ' ').trim().slice(0, 40).trim() || 'app';
+  const label = name.normalize('NFKC').replace(/[^A-Za-z0-9 .-]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 40).trim() || 'app';
   return [BY_UPLOAD_LINK, BY_ASSISTANT, BY_SERVER.toLowerCase()].includes(label.toLowerCase()) ? `app ${label}` : label;
 }
 

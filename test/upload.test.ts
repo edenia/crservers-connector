@@ -50,5 +50,7 @@ describe('source label of a draft change', () => {
     expect(sourceLabel('Upload  Link')).toBe('app Upload Link');
     expect(sourceLabel('assistant')).toBe('app assistant');
     expect(sourceLabel('CR Servers')).toBe('app CR Servers');
+    // Look-alike letters from another alphabet don't survive (here a Cyrillic o).
+    expect(sourceLabel('upl\u043ead link')).toBe('upl ad link');
   });
 });

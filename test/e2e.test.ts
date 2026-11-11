@@ -1553,7 +1553,8 @@ describe('support correlation (#56)', () => {
     const orig = console.log;
     console.log = (m: string) => logs.push(m);
     let failed: Awaited<ReturnType<typeof call>>;
-    const since = new Date();
+    // The database's clock, not this machine's: the rows are stamped there, and a few milliseconds of difference hid them.
+    const since: Date = (await pool.query('SELECT now() AS t')).rows[0].t;
     try {
       const c = await mcpClient(await connect('publish'));
       failed = await call(c, 'list_files', { path: 'no-existe-56' });
@@ -1577,9 +1578,11 @@ describe('support correlation (#56)', () => {
     // Support records (written in the background): the link to site, service, client and app.
     type Row = { kind: string; ref: string | null; tool: string | null; ok: boolean | null; site_ids: string[]; service_id: number | null; client_id: string | null; app: string | null };
     let rows: Row[] = [];
-    for (let i = 0; i < 50 && rows.length < 3; i++) {
+    // Records are written after the response, and other test files write theirs too: wait for these two rows, not for a count.
+    const landed = (rs: Row[]) => rs.some((r) => r.kind === 'initialize') && rs.some((r) => r.ref === ref);
+    for (let i = 0; i < 50 && !landed(rows); i++) {
       rows = (await pool.query<Row>('SELECT kind, ref, tool, ok, site_ids, service_id, client_id, app FROM support_events WHERE at >= $1 ORDER BY id', [since])).rows;
-      if (rows.length < 3) await new Promise((r) => setTimeout(r, 20));
+      if (!landed(rows)) await new Promise((r) => setTimeout(r, 20));
     }
     const init = rows.find((r) => r.kind === 'initialize');
     const bad = rows.find((r) => r.ref === ref);
@@ -1596,7 +1599,8 @@ describe('2026-07-28 clients (ChatGPT: server/discover, no initialize)', () => {
     const logs: string[] = [];
     const orig = console.log;
     console.log = (m: string) => logs.push(m);
-    const since = new Date();
+    // The database's clock, not this machine's: the rows are stamped there, and a few milliseconds of difference hid them.
+    const since: Date = (await pool.query('SELECT now() AS t')).rows[0].t;
     let failed = '';
     let info: Structured = {};
     let version: string | undefined;
@@ -1621,9 +1625,10 @@ describe('2026-07-28 clients (ChatGPT: server/discover, no initialize)', () => {
 
     type Row = { kind: string; ref: string | null; app: string | null; service_id: number | null; site_ids: string[] };
     let rows: Row[] = [];
-    for (let i = 0; i < 50 && rows.length < 3; i++) {
+    const landed = (rs: Row[]) => rs.some((r) => r.kind === 'initialize') && rs.some((r) => r.ref === ref);
+    for (let i = 0; i < 50 && !landed(rows); i++) {
       rows = (await pool.query<Row>('SELECT kind, ref, app, service_id, site_ids FROM support_events WHERE at >= $1 ORDER BY id', [since])).rows;
-      if (rows.length < 3) await new Promise((r) => setTimeout(r, 20));
+      if (!landed(rows)) await new Promise((r) => setTimeout(r, 20));
     }
     expect(rows.find((r) => r.kind === 'initialize')).toMatchObject({ app: 'openai-mcp' });
     expect(rows.find((r) => r.ref === ref)).toMatchObject({ kind: 'tool_call', service_id: expect.any(Number), site_ids: [expect.any(String)] });

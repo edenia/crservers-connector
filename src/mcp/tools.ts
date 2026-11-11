@@ -35,7 +35,7 @@ export interface McpDeps {
   /** Creates preview links for drafts. */
   preview?: Pick<PreviewService, 'createLink'>;
   /** Upload links: files from the user's device (or the AI's sandbox) into a draft. */
-  uploads?: Pick<UploadService, 'createLink' | 'uploaded'>;
+  uploads?: Pick<UploadService, 'createLink' | 'uploaded' | 'lastFolder'>;
   /** Big changes go to the site owner's approval link instead of going live from the chat. */
   approvals?: Pick<ApprovalService, 'request' | 'latest' | 'siteOfDraft'>;
   /** Downloads for import_from_url (public addresses only). Tests inject a fake. */
@@ -461,14 +461,9 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
         const added: { path: string; size: number }[] = [];
         for (const [i, file] of a.files.entries()) {
           const path = normalizeSitePath(a.paths[i]!);
-          let dl;
-          try {
-            dl = await (deps.fetchUrl ?? fetchPublicUrl)(file.download_url, maxFileBytes(path));
-          } catch (e) {
-            // Apps that don't hand chat attachments to connectors (Claude) send no usable download link.
-            if (!(e instanceof ImportError) && !(e instanceof TypeError)) throw e;
-            return fail(NO_ATTACHMENT, { path, added, use_instead: ['get_upload_link', 'import_from_url'] });
-          }
+          // Apps that don't hand chat attachments to connectors (Claude) send a file name or a sandbox path here, not a link.
+          if (!/^https?:\/\/\S+$/i.test(file.download_url.trim())) return fail(NO_ATTACHMENT, { path, added, use_instead: ['get_upload_link', 'import_from_url'] });
+          const dl = await (deps.fetchUrl ?? fetchPublicUrl)(file.download_url.trim(), maxFileBytes(path));
           assertMediaMatches(path, dl.data);
           const [res] = await deps.core.writeFiles(a.changeset_id, site.id, await fs(), [{ path, content: dl.data }]);
           if (!res?.ok) return fail(res?.error ?? 'No se pudo agregar. / Could not stage the file.', { path, added });
@@ -486,7 +481,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
         `Returns upload_url, a private link (valid 1 hour) that takes photos and other media files into one folder of the draft stored on CR Servers (the live site doesn't change until publish). Use it when the user wants to add files from their device, or attached them in the chat and add_attachments can't read them. Two ways to use it: if you have the file in a code sandbox with network access, upload it yourself with one HTTP PUT per file to upload_url + "/" + file name, the file as the request body (curl -T foto.jpg "<upload_url>/foto.jpg"); otherwise give upload_url to the user, who opens it and picks the files on their phone or computer. Call it again to see what has arrived (uploaded). Media only (images except SVG, video, audio, fonts, PDF); each file must really be the type its name says.`,
       inputSchema: {
         changeset_id: z.string(),
-        folder: z.string().max(200).default('img').describe('Folder in the site where the files go, e.g. "img" or "img/proyectos". To replace an existing photo, use its folder and upload a file with the same name.'),
+        folder: z.string().max(200).optional().describe('Folder in the site where the files go, e.g. "img" or "img/proyectos". To replace an existing photo, use its folder and upload a file with the same name. When omitted: the folder of this draft\'s previous upload link, or "img".'),
         widths: z.array(z.number().int().min(WIDTH_MIN).max(WIDTH_MAX)).max(4).optional().describe('Extra copies the upload page makes of each photo for srcset, by width in pixels, e.g. [800, 1200, 1600] gives foto-800.jpg and so on. Only for files the user uploads on the page.'),
       },
       annotations: { ...DRAFT, openWorldHint: false },
@@ -494,7 +489,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
     (a) =>
       run({ changesetId: a.changeset_id }, async ({ site }) => {
         if (!deps.uploads || !extra.grantId) return fail('No disponible. / Not available.');
-        const folder = normalizeSiteDir(a.folder);
+        const folder = normalizeSiteDir(a.folder ?? (await deps.uploads.lastFolder(a.changeset_id)) ?? 'img');
         const refused = folder ? refuseOtherSites(site, [folder]) : null;
         if (refused) return refused;
         if (folder.split('/').some((seg) => seg.startsWith('.'))) throw new PathError('Hidden folders are not allowed', folder);

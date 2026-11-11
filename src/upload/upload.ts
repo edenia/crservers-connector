@@ -3,7 +3,7 @@ import express, { type Request, type Response } from 'express';
 import type { Pool } from 'pg';
 import { hashToken, randomToken } from '../crypto.js';
 import type { DeployCore } from '../deploy/core.js';
-import { ImportError, assertMediaMatches } from '../deploy/fetchurl.js';
+import { IMPORTABLE_EXT, ImportError, assertMediaMatches } from '../deploy/fetchurl.js';
 import { MB, PathError, extOf, maxFileBytes, normalizeSiteDir, normalizeSitePath } from '../deploy/paths.js';
 import type { SiteFs } from '../deploy/sitefs.js';
 import type { SiteRepo } from '../sites.js';
@@ -29,7 +29,10 @@ export const WIDTH_MAX = 2000;
 const PHOTO_MAX_PX = 2000;
 const PHOTO_QUALITY = 0.78;
 
-const PATH_RE = /^\/([A-Za-z0-9_-]{20,64})(?:\/([^/]*))?\/?$/;
+const PATH_RE = /^\/([A-Za-z0-9_-]{20,64})(?:\/(.*))?$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+/** Uploads held in memory at once (each up to 25 MB, 100 MB for video). */
+const MAX_IN_FLIGHT = 3;
 
 export interface UploadedFile {
   path: string;
@@ -93,9 +96,11 @@ export interface UploadDeps {
 }
 
 export class UploadService {
-  /** One upload at a time per draft: a draft is read, changed and saved as a whole. */
+  /** One upload at a time per draft, so two files of the same name can't pick the same free name. */
   private readonly queues = new Map<string, Promise<unknown>>();
-  private readonly body = express.raw({ type: () => true, limit: 100 * MB + 1024 });
+  /** Bodies are held in memory until they are in the draft: only a few at a time, whoever sends them. */
+  private readonly inFlight = new Semaphore(MAX_IN_FLIGHT);
+  private readonly bodies = new Map<number, ReturnType<typeof express.raw>>();
 
   constructor(private readonly d: UploadDeps) {}
 
@@ -113,6 +118,12 @@ export class UploadService {
     );
     if (!r.rows[0]) throw new Error('draft not found');
     return { url: `${this.d.publicUrl}/upload/${token}`, expiresAt: r.rows[0].expires_at };
+  }
+
+  /** The folder of the draft's latest upload link, if it has one. */
+  async lastFolder(draftId: string): Promise<string | undefined> {
+    if (!UUID_RE.test(draftId)) return undefined;
+    return (await this.d.pool.query('SELECT folder FROM upload_links WHERE draft_id = $1 ORDER BY created_at DESC LIMIT 1', [draftId])).rows[0]?.folder;
   }
 
   /** Files that arrived through this draft's upload links and are still in the draft, oldest first. */
@@ -145,11 +156,13 @@ export class UploadService {
   }
 
   /**
-   * Adds one file to the link's draft. `unique` keeps an existing file of the same name (the new one
-   * gets "-2"); without it the name is the sender's choice and replaces that file in the draft.
+   * Where a file sent as `rawName` would go, checked before its body is read: a clean name inside the
+   * link's folder, a media type other than SVG, not in another site's folder.
    */
-  async store(t: UploadTarget, rawName: string, data: Buffer, unique: boolean): Promise<UploadedFile> {
-    if (!data.length) throw new UploadError(400, 'The file is empty');
+  place(t: Pick<UploadTarget, 'folder' | 'protectedDirs'>, rawName: string): string {
+    if (/[/\\]/.test(rawName.replace(/^[/\\]+|[/\\]+$/g, ''))) {
+      throw new UploadError(400, `Send only a file name after the link: this link puts files in ${t.folder ? `${t.folder}/` : 'the site root'}. For another folder, ask for a link with that folder (get_upload_link).`);
+    }
     const name = safeFileName(rawName);
     let path: string;
     try {
@@ -160,32 +173,45 @@ export class UploadService {
     if (t.protectedDirs.some((dir) => path === dir || path.startsWith(`${dir}/`))) throw new UploadError(403, 'That folder belongs to another site in this hosting account');
     // SVG can carry script, and whoever holds the link is not signed in: the assistant writes SVG with write_files.
     if (extOf(path) === 'svg') throw new UploadError(415, 'SVG files are not accepted through an upload link; write them with write_files');
+    if (!IMPORTABLE_EXT.includes(extOf(path))) throw new UploadError(415, 'Only media files are accepted here: images, video, audio, fonts and PDF');
+    return path;
+  }
+
+  /**
+   * Adds one file to the link's draft at `path` (from place()). `unique` keeps an existing file of the
+   * same name (the new one gets "-2"); without it the sender chose the name and it replaces that file in the draft.
+   */
+  async store(t: UploadTarget, path: string, data: Buffer, unique: boolean): Promise<UploadedFile> {
+    if (!data.length) throw new UploadError(400, 'The file is empty');
     if (data.length > maxFileBytes(path)) throw new UploadError(413, `File too large (max ${maxFileBytes(path) / MB} MB)`);
     try {
       assertMediaMatches(path, data);
     } catch (e) {
       if (!(e instanceof ImportError)) throw e;
-      throw new UploadError(415, extOf(path) && e.message.includes('is not a') ? `The file is not really a .${extOf(path)} file` : 'Only media files are accepted here: images, video, audio, fonts and PDF');
+      throw new UploadError(415, `The file is not really a .${extOf(path)} file`);
     }
     return this.inTurn(t.draftId, async () => {
       // Counted first, so parallel requests can't go past the cap.
       const slot = await this.d.pool.query('UPDATE upload_links SET files = files + 1 WHERE token_hash = $1 AND files < $2 AND expires_at > now()', [t.tokenHash, UPLOAD_MAX_FILES]);
       if (!slot.rowCount) throw new UploadError(429, 'This link has taken all the files it can; ask your assistant for a new one');
-      const fs = await this.d.openFs(t.siteId);
+      let saved = false;
+      const fs = await this.d.openFs(t.siteId).catch(async (e: unknown) => {
+        await this.refund(t);
+        throw e;
+      });
       try {
-        if (unique) {
-          const draft = await this.d.core.getDraft(t.draftId, t.siteId);
-          path = await freePath(path, async (p) => draft.writes.has(p) || (!draft.deletes.has(p) && (await fs.stat(p)) !== null));
-        }
+        if (unique) path = await freePath(path, (p) => this.taken(t.draftId, fs, p));
         const [res] = await this.d.core.writeFiles(t.draftId, t.siteId, fs, [{ path, content: data }]);
         if (!res?.ok) throw new UploadError(400, res?.error ?? 'Could not add the file');
+        saved = true;
         await this.d.pool.query(
           `INSERT INTO upload_files (draft_id, path) VALUES ($1, $2) ON CONFLICT (draft_id, path) DO UPDATE SET at = now()`,
           [t.draftId, path],
         );
         return { path, size: data.length };
       } catch (e) {
-        await this.d.pool.query('UPDATE upload_links SET files = files - 1 WHERE token_hash = $1', [t.tokenHash]).catch(() => undefined);
+        // A file that reached the draft keeps its place in the count, whatever failed after it.
+        if (!saved) await this.refund(t);
         throw e;
       } finally {
         await fs.close().catch(() => undefined);
@@ -193,15 +219,33 @@ export class UploadService {
     });
   }
 
+  private async refund(t: UploadTarget): Promise<void> {
+    await this.d.pool.query('UPDATE upload_links SET files = files - 1 WHERE token_hash = $1', [t.tokenHash]).catch(() => undefined);
+  }
+
+  /** Whether the draft, or the live site where the draft doesn't say, already has a file at `path`. */
+  private async taken(draftId: string, fs: SiteFs, path: string): Promise<boolean> {
+    const row = (await this.d.pool.query('SELECT deleted FROM draft_files WHERE draft_id = $1 AND path = $2', [draftId, path])).rows[0];
+    if (row) return !row.deleted;
+    return (await fs.stat(path)) !== null;
+  }
+
   private inTurn<T>(draftId: string, fn: () => Promise<T>): Promise<T> {
     const prev = this.queues.get(draftId) ?? Promise.resolve();
-    const run = prev.catch(() => undefined).then(fn);
+    const run = prev.then(fn);
     const tail = run.catch(() => undefined);
     this.queues.set(draftId, tail);
     void tail.then(() => {
       if (this.queues.get(draftId) === tail) this.queues.delete(draftId);
     });
     return run;
+  }
+
+  /** Reads the request body, refusing anything over `limit` bytes as soon as that is known. */
+  private readBody(req: Request, res: Response, limit: number): Promise<Buffer> {
+    let parser = this.bodies.get(limit);
+    if (!parser) this.bodies.set(limit, (parser = express.raw({ type: () => true, limit })));
+    return new Promise<Buffer>((resolve, reject) => parser(req, res, (e?: unknown) => (e ? reject(e) : resolve(Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0)))));
   }
 
   /** Express handler mounted at /upload. req.path is "/<token>" (the page) or "/<token>/<file name>" (one file). */
@@ -223,16 +267,25 @@ export class UploadService {
       if (sending) return void res.status(404).json({ ok: false, error: 'This upload link is no longer valid (it lasts 1 hour and ends when the draft is published or discarded). Ask for a new one with get_upload_link.' });
       return void res.status(404).type('html').send(page({ lang, title: T[lang].expiredTitle, state: 'info', body: `<p>${T[lang].expiredBody}</p>` }));
     }
+    const rest = (m[2] ?? '').replace(/\/+$/, '');
 
     if (sending) {
       try {
-        if (!m[2]) throw new UploadError(400, 'Put the file name at the end of the address: PUT <upload_url>/foto.jpg, with the file as the request body');
+        if (!rest) throw new UploadError(400, 'Put the file name at the end of the address: PUT <upload_url>/foto.jpg, with the file as the request body');
         if ((req.get('content-type') ?? '').toLowerCase().startsWith('multipart/')) throw new UploadError(415, 'Send the file itself as the request body (curl -T foto.jpg "<upload_url>/foto.jpg"), not a multipart form');
-        if (Number(req.get('content-length') ?? 0) > 100 * MB) throw new UploadError(413, 'File too large');
-        await new Promise<void>((resolve, reject) => this.body(req, res, (e?: unknown) => (e ? reject(e) : resolve())));
-        const data = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
-        const file = await this.store(target, decodeURIComponent(m[2]), data, req.query.unique === '1');
-        return void res.status(201).json({ ok: true, ...file });
+        // Everything that can be refused is refused before the body is read.
+        const path = this.place(target, decodeURIComponent(rest));
+        const limit = maxFileBytes(path);
+        if (Number(req.get('content-length') ?? 0) > limit) throw new UploadError(413, `File too large (max ${limit / MB} MB)`);
+        if (target.files >= UPLOAD_MAX_FILES) throw new UploadError(429, 'This link has taken all the files it can; ask your assistant for a new one');
+        const release = await this.inFlight.acquire();
+        try {
+          const data = await this.readBody(req, res, limit);
+          const file = await this.store(target, path, data, req.query.unique === '1');
+          return void res.status(201).json({ ok: true, ...file });
+        } finally {
+          release();
+        }
       } catch (e) {
         if (e instanceof UploadError) return void res.status(e.status).json({ ok: false, error: e.message });
         if (e instanceof PathError || e instanceof URIError) return void res.status(400).json({ ok: false, error: e.message });
@@ -245,9 +298,30 @@ export class UploadService {
     }
 
     if (req.method !== 'GET' && req.method !== 'HEAD') return void res.status(405).set('allow', 'GET, HEAD, PUT, POST').end();
-    if (m[2]) return void res.status(404).json({ ok: false, error: 'Nothing to download here: this link only takes files (PUT)' });
+    if (rest) return void res.status(404).json({ ok: false, error: 'Nothing to download here: this link only takes files (PUT)' });
     const uploaded = (await this.uploaded(target.draftId)).filter((f) => !target.folder || f.path.startsWith(`${target.folder}/`));
     res.type('html').send(uploadPage(lang, target, uploaded, nonce));
+  }
+}
+
+/** At most `max` holders at a time; the rest wait their turn. */
+class Semaphore {
+  private free: number;
+  private readonly waiting: (() => void)[] = [];
+  constructor(max: number) {
+    this.free = max;
+  }
+  async acquire(): Promise<() => void> {
+    if (this.free > 0) this.free--;
+    else await new Promise<void>((r) => this.waiting.push(r));
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const next = this.waiting.shift();
+      if (next) next();
+      else this.free++;
+    };
   }
 }
 
@@ -257,7 +331,7 @@ const T = {
     intro: (domain: string, folder: string) => `Las fotos que elija se agregan al borrador de <strong>${esc(domain)}</strong>${folder ? `, en la carpeta <code>${esc(folder)}/</code>` : ''}. Nada se publica todavía: su asistente le mostrará una vista previa antes.`,
     pick: 'Elegir fotos',
     drop: 'o arrástrelas aquí',
-    note: 'Las fotos grandes se reducen en su dispositivo antes de enviarse (máximo 2000 px) y se les quita la ubicación.',
+    note: 'Las fotos grandes se reducen en su dispositivo antes de enviarse (máximo 2000 px). A las fotos de cámara se les quita la ubicación donde se tomaron.',
     done: 'Listo. Vuelva al chat y dígale a su asistente que ya subió las fotos.',
     sending: 'Enviando…',
     failed: 'No se pudo subir',
@@ -267,6 +341,7 @@ const T = {
       415: 'este tipo de archivo no se acepta (solo imágenes, video, audio, fuentes y PDF)',
       429: 'este enlace ya recibió todos los archivos que admite; pídale uno nuevo a su asistente',
       0: 'intente de nuevo',
+      photo: 'este dispositivo no pudo preparar la foto; pruebe desde otro dispositivo o con una foto más pequeña',
     },
     already: 'Ya en el borrador',
     expires: 'Este enlace funciona durante una hora.',
@@ -278,7 +353,7 @@ const T = {
     intro: (domain: string, folder: string) => `The photos you choose are added to the draft of <strong>${esc(domain)}</strong>${folder ? `, in the <code>${esc(folder)}/</code> folder` : ''}. Nothing is published yet: your assistant will show you a preview first.`,
     pick: 'Choose photos',
     drop: 'or drop them here',
-    note: 'Large photos are made smaller on your device before they are sent (2000 px at most), and their location data is removed.',
+    note: 'Large photos are made smaller on your device before they are sent (2000 px at most). Camera photos have the place they were taken removed.',
     done: 'Done. Go back to the chat and tell your assistant the photos are uploaded.',
     sending: 'Sending…',
     failed: 'Could not upload',
@@ -288,6 +363,7 @@ const T = {
       415: 'this kind of file is not accepted (only images, video, audio, fonts and PDF)',
       429: 'this link has taken all the files it can; ask your assistant for a new one',
       0: 'please try again',
+      photo: 'this device could not prepare the photo; try another device or a smaller photo',
     },
     already: 'Already in the draft',
     expires: 'This link works for one hour.',
@@ -317,28 +393,34 @@ export function uploadPage(lang: Lang, t: Pick<UploadTarget, 'domain' | 'folder'
 
 /**
  * The page's script. Photos (JPEG, WebP, and HEIC where the browser can decode it) are redrawn on a
- * canvas: at most CFG.max px on the long side, JPEG, which also drops EXIF (location). Other files
- * go up as they are. One request per file, in order.
+ * canvas: at most CFG.max px on the long side, JPEG, which also drops EXIF (location). A photo the
+ * device can't redraw is not sent, so none goes up with its location. Other files (PNG, GIF, PDF,
+ * video) go up as they are. One request per file, in order.
  */
 const PAGE_JS = `
 const list=document.getElementById('list'),drop=document.getElementById('drop'),pick=document.getElementById('pick'),done=document.getElementById('done');
 const base=location.pathname.replace(/\\/+$/,'');
 function row(name){const li=document.createElement('li'),a=document.createElement('span'),b=document.createElement('span');a.textContent=name;b.textContent=CFG.t.sending;b.className='muted';li.append(a,b);list.append(li);return{a,b}}
-async function draw(bmp,k){const c=document.createElement('canvas');c.width=Math.max(1,Math.round(bmp.width*k));c.height=Math.max(1,Math.round(bmp.height*k));
-const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(bmp,0,0,c.width,c.height);return new Promise(r=>c.toBlob(r,'image/jpeg',CFG.quality))}
+async function draw(bmp,W,H,k){const c=document.createElement('canvas');c.width=Math.max(1,Math.round(W*k));c.height=Math.max(1,Math.round(H*k));
+const x=c.getContext('2d');if(!x)return null;x.fillStyle='#fff';x.fillRect(0,0,c.width,c.height);x.drawImage(bmp,0,0,c.width,c.height);return new Promise(r=>c.toBlob(r,'image/jpeg',CFG.quality))}
+// A photo as something a canvas can draw: the fast decoder first, then an <img> (some phones only manage that one).
+async function decode(file){try{return await createImageBitmap(file,{imageOrientation:'from-image'})}catch(e){}
+const url=URL.createObjectURL(file);try{const im=new Image();im.src=url;await im.decode();return im}finally{URL.revokeObjectURL(url)}}
 async function versions(file){const stem=file.name.replace(/\\.[^.]*$/,'')||'foto';
 if(!/^image\\/(jpeg|webp|heic|heif)$/.test(file.type)&&!/\\.(jpe?g|webp|heic|heif)$/i.test(file.name))return[{name:file.name,blob:file}];
-let bmp;try{bmp=await createImageBitmap(file,{imageOrientation:'from-image'})}catch(e){return[{name:file.name,blob:file}]}
-const k=Math.min(1,CFG.max/Math.max(bmp.width,bmp.height)),main=await draw(bmp,k);if(!main)return[{name:file.name,blob:file}];
+// Camera photos never go up as they are (they carry the place they were taken): redrawn, or not sent.
+let bmp;try{bmp=await decode(file)}catch(e){throw new Error(CFG.t.why.photo)}
+const W=bmp.naturalWidth||bmp.width,H=bmp.naturalHeight||bmp.height,k=Math.min(1,CFG.max/Math.max(W,H)),main=await draw(bmp,W,H,k);if(!main)throw new Error(CFG.t.why.photo);
 const out=[{name:stem+'.jpg',blob:main}];
 // Extra copies by image width, only narrower than the main one.
-for(const w of CFG.widths){if(w>=Math.round(bmp.width*k))continue;const b=await draw(bmp,w/bmp.width);if(b)out.push({name:stem+'-'+w+'.jpg',blob:b,of:stem})}
+for(const w of CFG.widths){if(w>=Math.round(W*k))continue;const b=await draw(bmp,W,H,w/W);if(b)out.push({name:stem+'-'+w+'.jpg',blob:b,of:stem})}
 bmp.close&&bmp.close();return out}
 async function send(v,to){const r=row(v.name);try{const res=await fetch(base+'/'+encodeURIComponent(to||v.name)+(to?'':'?unique=1'),{method:'PUT',body:v.blob,headers:{'content-type':'application/octet-stream'}});
 const j=await res.json().catch(()=>({}));if(!res.ok||!j.ok)throw new Error(CFG.t.why[res.status]||CFG.t.why[0]);r.a.textContent=j.path;r.b.textContent='✓ '+Math.max(1,Math.round(j.size/1024))+' KB';r.b.className='ok';return j.path}
 catch(e){r.b.textContent=CFG.t.failed+': '+(e instanceof TypeError?CFG.t.why[0]:e.message);r.b.className='bad';return null}}
 let busy=Promise.resolve();
-function take(files){busy=busy.then(async()=>{let any=false;for(const f of files){const vs=await versions(f);const first=await send(vs[0]);if(!first)continue;any=true;
+function take(files){busy=busy.then(async()=>{let any=false;for(const f of files){let vs;try{vs=await versions(f)}catch(e){const r=row(f.name);r.b.textContent=CFG.t.failed+': '+e.message;r.b.className='bad';continue}
+const first=await send(vs[0]);if(!first)continue;any=true;
 // Extra widths follow the name the first copy got ("foto-2.jpg" → "foto-2-800.jpg").
 const got=first.slice(first.lastIndexOf('/')+1).replace(/\\.[^.]*$/,'');for(const v of vs.slice(1))await send(v,got+v.name.slice(v.of.length))}
 if(any)done.hidden=false})}

@@ -421,8 +421,7 @@
             "type": "string"
           },
           "folder": {
-            "default": "img",
-            "description": "Folder in the site where the files go, e.g. \"img\" or \"img/proyectos\". To replace an existing photo, use its folder and upload a file with the same name.",
+            "description": "Folder in the site where the files go, e.g. \"img\" or \"img/proyectos\". To replace an existing photo, use its folder and upload a file with the same name. When omitted: the folder of this draft's previous upload link, or \"img\".",
             "type": "string",
             "maxLength": 200
           },

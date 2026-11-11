@@ -17,7 +17,6 @@ import { MemorySiteFs } from '../src/deploy/sitefs.js';
 import { createApp } from '../src/http.js';
 import { PreviewService } from '../src/preview/preview.js';
 import { ApprovalService, approvalReasons } from '../src/approvals/approvals.js';
-import { ImportError } from '../src/deploy/fetchurl.js';
 import { UploadService } from '../src/upload/upload.js';
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
@@ -105,8 +104,6 @@ beforeAll(async () => {
   const layout = new LayoutSync(sites, clientArea, 0);
   const approvals = new ApprovalService({ pool, sites, core, audit, openFs: async () => siteFs, preview, clientArea, clientAreaUrl: CA_URL, reqKey, publicUrl: base, appName, layout });
   const fetchUrl = async (url: string) => {
-    // What a chat attachment looks like from an app that can't hand files to connectors.
-    if (!/^https?:/.test(url)) throw new ImportError('Only http(s) links are supported');
     if (url.endsWith('/foto.png')) return { data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]), contentType: 'image/png', finalUrl: url };
     return { data: Buffer.from('<!doctype html><p>login</p>'), contentType: 'text/html', finalUrl: url };
   };
@@ -114,7 +111,7 @@ beforeAll(async () => {
   const mcp = { core, sites, preview, approvals, uploads, audit, openFs: async () => siteFs, appName, fetchUrl, layout, support: new SupportLog(pool) };
   sitesRepo = sites;
   const clientApi = { pool, sites, audit, appName, reqKey, removeSite: (grantId: string, siteId: string) => provider.removeSite(grantId, siteId) };
-  server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals, uploads, clientApi, openaiAppsChallenge: 'test-challenge-token', events: { pool, sites, reqKey }, registrationRateLimit: false }));
+  server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals, uploads, clientApi, openaiAppsChallenge: 'test-challenge-token', events: { pool, sites, reqKey }, rateLimits: false }));
 });
 
 afterAll(async () => {
@@ -959,12 +956,21 @@ describe('upload links (files from the device, or from the assistant\'s sandbox)
     expect((await put(`${url}/vacio.png`, '')).status).toBe(400);
     expect((await put(url, PNG)).status).toBe(400);
     expect((await put(`${url}/a.png`, 'x', { 'content-type': 'multipart/form-data; boundary=x' })).status).toBe(415);
-    expect((await put(`${url}/..%2F..%2Fa.png`, PNG)).status).toBe(201); // the name is cleaned: it stays in the folder
+    // A file name only: the folder is the link's.
+    const nested = await put(`${url}/otra/carpeta/a.png`, PNG);
+    expect(nested.status).toBe(400);
+    expect(((await nested.json()) as { error: string }).error).toContain('img/fotos/');
+    expect((await put(`${url}/..%2F..%2Fa.png`, PNG)).status).toBe(400);
+    expect((await put(`${url}/a.png`, PNG)).status).toBe(201);
+    // Too big for its type: refused from the headers, before the body is read.
+    expect((await put(`${url}/enorme.png`, Buffer.alloc(26 * 1024 * 1024, 1))).status).toBe(413);
     // The link gives nothing back.
     expect((await get(`${new URL(url).pathname}/mi-foto-1.png`)).status).toBe(404);
 
-    const again = await call(c, 'get_upload_link', { changeset_id: draft.changeset_id, folder: 'img/fotos' });
+    // Asking again without a folder keeps the folder of the draft's last link.
+    const again = await call(c, 'get_upload_link', { changeset_id: draft.changeset_id });
     expect(again.data.upload_url).not.toBe(url);
+    expect(again.data.folder).toBe('img/fotos');
     expect(again.data.uploaded).toEqual([
       { path: 'img/fotos/mi-foto-1-2.png', size: 11 },
       { path: 'img/fotos/mi-foto-1.png', size: 22 },
@@ -1018,6 +1024,27 @@ describe('upload links (files from the device, or from the assistant\'s sandbox)
     expect((await put(`${link.data.upload_url}/despues.png`, PNG)).status).toBe(404);
     expect((await get(new URL(link.data.upload_url).pathname)).status).toBe(404);
     await pool.query('DELETE FROM drafts WHERE id = $1', [draft.changeset_id]);
+  });
+
+  it('an upload and a tool call on the same draft at the same time keep each other\'s files', async () => {
+    const c = await mcpClient(await connect('publish'));
+    const { data: draft } = await call(c, 'start_changeset');
+    const link = await call(c, 'get_upload_link', { changeset_id: draft.changeset_id });
+    expect(link.data.folder).toBe('img');
+    const results = await Promise.all([
+      ...[1, 2, 3, 4].map((n) => put(`${link.data.upload_url}/foto-${n}.png`, PNG).then((r) => r.status)),
+      ...[1, 2, 3, 4].map((n) => call(c, 'write_files', { changeset_id: draft.changeset_id, files: [{ path: `pagina-${n}.html`, content: 'x' }] }).then((r) => (r.isError ? 500 : 201))),
+      put(`${link.data.upload_url}/misma.png?unique=1`, PNG).then((r) => r.status),
+      put(`${link.data.upload_url}/misma.png?unique=1`, PNG).then((r) => r.status),
+    ]);
+    expect(results).toEqual(Array(10).fill(201));
+    const pv = await call(c, 'preview_changeset', { changeset_id: draft.changeset_id });
+    expect(pv.data.added).toEqual([
+      'img/foto-1.png', 'img/foto-2.png', 'img/foto-3.png', 'img/foto-4.png', 'img/misma-2.png', 'img/misma.png',
+      'pagina-1.html', 'pagina-2.html', 'pagina-3.html', 'pagina-4.html',
+    ]);
+    await call(c, 'discard_changeset', { changeset_id: draft.changeset_id });
+    await c.close();
   });
 
   it('add_attachments points at the upload link when the app gives no download link', async () => {

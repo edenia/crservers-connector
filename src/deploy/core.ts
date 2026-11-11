@@ -95,6 +95,7 @@ export class DeployCore {
   private readonly maxDraftFiles: number;
   private readonly now: () => Date;
   private readonly siteLocks = new Map<string, Promise<unknown>>();
+  private readonly draftLocks = new Map<string, Promise<unknown>>();
 
   constructor(opts: DeployCoreOptions) {
     this.drafts = opts.drafts;
@@ -169,6 +170,10 @@ export class DeployCore {
   }
 
   async writeFiles(draftId: string, siteId: string, fs: SiteFs, files: FileInput[]): Promise<{ path: string; ok: boolean; error?: string }[]> {
+    return this.withDraftLock(draftId, () => this.writeFilesNow(draftId, siteId, fs, files));
+  }
+
+  private async writeFilesNow(draftId: string, siteId: string, fs: SiteFs, files: FileInput[]): Promise<{ path: string; ok: boolean; error?: string }[]> {
     const d = await this.getDraft(draftId, siteId);
     const results: { path: string; ok: boolean; error?: string }[] = [];
     for (const f of files) {
@@ -196,6 +201,10 @@ export class DeployCore {
   }
 
   async deleteFiles(draftId: string, siteId: string, fs: SiteFs, paths: string[]): Promise<{ path: string; ok: boolean; error?: string }[]> {
+    return this.withDraftLock(draftId, () => this.deleteFilesNow(draftId, siteId, fs, paths));
+  }
+
+  private async deleteFilesNow(draftId: string, siteId: string, fs: SiteFs, paths: string[]): Promise<{ path: string; ok: boolean; error?: string }[]> {
     const d = await this.getDraft(draftId, siteId);
     const results: { path: string; ok: boolean; error?: string }[] = [];
     for (const raw of paths) {
@@ -312,6 +321,10 @@ export class DeployCore {
 
   /** Marks the current draft version as previewed. Scans and the preview site are added by callers. */
   async preview(draftId: string, siteId: string, fs: SiteFs): Promise<PreviewSummary> {
+    return this.withDraftLock(draftId, () => this.previewNow(draftId, siteId, fs));
+  }
+
+  private async previewNow(draftId: string, siteId: string, fs: SiteFs): Promise<PreviewSummary> {
     const d = await this.getDraft(draftId, siteId);
     if (await this.planSkeletonCleanup(d, fs)) d.version++;
     const { conflicts } = await this.conflicts(d, fs);
@@ -509,6 +522,21 @@ export class DeployCore {
 
   private async deleteBlobs(files: ReleaseFile[]): Promise<void> {
     for (const f of files) if (f.beforeBlob) await this.blobs.delete(f.beforeBlob).catch(() => undefined);
+  }
+
+  /**
+   * One change at a time per draft: a draft is loaded, changed and saved as a whole, so two overlapping
+   * changes (a tool call and an upload through a link) would drop each other's files. Single-process lock.
+   */
+  private withDraftLock<T>(draftId: string, fn: () => Promise<T>): Promise<T> {
+    const prev = this.draftLocks.get(draftId) ?? Promise.resolve();
+    const run = prev.then(fn);
+    const tail = run.catch(() => undefined);
+    this.draftLocks.set(draftId, tail);
+    void tail.then(() => {
+      if (this.draftLocks.get(draftId) === tail) this.draftLocks.delete(draftId);
+    });
+    return run;
   }
 
   /** One publish or revert at a time per site. Single-process lock; Postgres advisory lock later. */

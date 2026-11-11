@@ -34,7 +34,7 @@ export interface AppDeps {
   /** OpenAI apps directory domain verification token (empty = 404). */
   openaiAppsChallenge?: string;
   /** Tests only: false turns off the per-IP client registration and token limits. */
-  registrationRateLimit?: false;
+  rateLimits?: false;
   preview: PreviewService;
   approvals: ApprovalService;
   /** Upload links for drafts (src/upload/upload.ts). */
@@ -110,7 +110,7 @@ export function createApp(d: AppDeps): Express {
   app.use(mcpAuthRouter({
     provider: d.provider, issuerUrl, resourceServerUrl, scopesSupported: SCOPES_SUPPORTED, resourceName: 'CR Servers',
     // Production keeps the SDK's per-IP limits (20 registrations/hour, 50 token requests/15 min); the test suite goes past both.
-    ...(d.registrationRateLimit === false ? { clientRegistrationOptions: { rateLimit: false as const }, tokenOptions: { rateLimit: false as const } } : {}),
+    ...(d.rateLimits === false ? { clientRegistrationOptions: { rateLimit: false as const }, tokenOptions: { rateLimit: false as const } } : {}),
   }));
 
   // One callback for both client-area round trips: new connections and approval sign-ins.

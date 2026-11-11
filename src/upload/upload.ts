@@ -254,6 +254,13 @@ const T = {
     done: 'Listo. Vuelva al chat y dígale a su asistente que ya subió las fotos.',
     sending: 'Enviando…',
     failed: 'No se pudo subir',
+    why: {
+      404: 'el enlace venció; pídale uno nuevo a su asistente',
+      413: 'el archivo es demasiado grande (máximo 25 MB; video, 100 MB)',
+      415: 'este tipo de archivo no se acepta (solo imágenes, video, audio, fuentes y PDF)',
+      429: 'este enlace ya recibió todos los archivos que admite; pídale uno nuevo a su asistente',
+      0: 'intente de nuevo',
+    },
     already: 'Ya en el borrador',
     expires: 'Este enlace funciona durante una hora.',
     expiredTitle: 'Este enlace ya no está disponible',
@@ -268,6 +275,13 @@ const T = {
     done: 'Done. Go back to the chat and tell your assistant the photos are uploaded.',
     sending: 'Sending…',
     failed: 'Could not upload',
+    why: {
+      404: 'the link expired; ask your assistant for a new one',
+      413: 'the file is too large (25 MB at most; video, 100 MB)',
+      415: 'this kind of file is not accepted (only images, video, audio, fonts and PDF)',
+      429: 'this link has taken all the files it can; ask your assistant for a new one',
+      0: 'please try again',
+    },
     already: 'Already in the draft',
     expires: 'This link works for one hour.',
     expiredTitle: 'This link is no longer available',
@@ -283,7 +297,7 @@ ul.up .ok{color:#067647;font-weight:700}ul.up .bad{color:#b42318}`;
 /** Exported for tests. */
 export function uploadPage(lang: Lang, t: Pick<UploadTarget, 'domain' | 'folder' | 'widths'>, uploaded: UploadedFile[], nonce: string): string {
   const s = T[lang];
-  const cfg = { widths: t.widths, max: PHOTO_MAX_PX, quality: PHOTO_QUALITY, t: { sending: s.sending, failed: s.failed } };
+  const cfg = { widths: t.widths, max: PHOTO_MAX_PX, quality: PHOTO_QUALITY, t: { sending: s.sending, failed: s.failed, why: s.why } };
   const body = `<style>${PAGE_CSS}</style>
 <p>${s.intro(t.domain, t.folder)}</p>
 <div class="drop" id="drop"><label><input type="file" id="pick" multiple accept="image/*,video/mp4,video/webm,audio/mpeg,application/pdf"><span class="btn">${s.pick}</span></label><p class="muted small">${s.drop}</p></div>
@@ -314,8 +328,8 @@ const out=[{name:stem+'.jpg',blob:main}];
 for(const w of CFG.widths){if(w>=Math.round(bmp.width*k))continue;const b=await draw(bmp,w/bmp.width);if(b)out.push({name:stem+'-'+w+'.jpg',blob:b,of:stem})}
 bmp.close&&bmp.close();return out}
 async function send(v,to){const r=row(v.name);try{const res=await fetch(base+'/'+encodeURIComponent(to||v.name)+(to?'':'?unique=1'),{method:'PUT',body:v.blob,headers:{'content-type':'application/octet-stream'}});
-const j=await res.json().catch(()=>({}));if(!res.ok||!j.ok)throw new Error(j.error||res.status);r.a.textContent=j.path;r.b.textContent='✓ '+Math.max(1,Math.round(j.size/1024))+' KB';r.b.className='ok';return j.path}
-catch(e){r.b.textContent=CFG.t.failed+': '+e.message;r.b.className='bad';return null}}
+const j=await res.json().catch(()=>({}));if(!res.ok||!j.ok)throw new Error(CFG.t.why[res.status]||CFG.t.why[0]);r.a.textContent=j.path;r.b.textContent='✓ '+Math.max(1,Math.round(j.size/1024))+' KB';r.b.className='ok';return j.path}
+catch(e){r.b.textContent=CFG.t.failed+': '+(e instanceof TypeError?CFG.t.why[0]:e.message);r.b.className='bad';return null}}
 let busy=Promise.resolve();
 function take(files){busy=busy.then(async()=>{let any=false;for(const f of files){const vs=await versions(f);const first=await send(vs[0]);if(!first)continue;any=true;
 // Extra widths follow the name the first copy got ("foto-2.jpg" → "foto-2-800.jpg").

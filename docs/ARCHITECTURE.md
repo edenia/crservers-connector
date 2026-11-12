@@ -126,9 +126,14 @@ Every tool works on one of the connection's sites (see [Sites and connections](#
 
 | Kind | Tools |
 |---|---|
-| Read-only | `list_sites`, `get_site_info`, `get_usage_limits`, `list_files`, `read_file`, `list_releases`, `get_activity_log` |
-| Draft (nothing goes live) | `start_changeset`, `write_files`, `edit_file`, `import_from_url`, `add_attachments`, `get_upload_link`, `delete_files`, `preview_changeset`, `discard_changeset` |
+| Read-only | `list_sites`, `get_site_info`, `get_usage_limits`, `list_files`, `read_file`, `search_files`, `list_releases`, `get_activity_log` |
+| Draft (nothing goes live) | `start_changeset`, `write_files`, `edit_file`, `copy_files`, `replace_in_files`, `import_from_url`, `add_attachments`, `get_upload_link`, `delete_files`, `preview_changeset`, `discard_changeset` |
 | Live (destructive, the host asks the user) | `publish`, `revert_release` |
+| Sends the user's text to CR Servers | `send_feedback` |
+
+**Changes across many files** (`src/mcp/bulk.ts`). `copy_files` copies files to new paths inside a draft, optionally replacing exact text in the copy, so a page made from another one isn't resent. `search_files` finds exact text in the text files of the live site or a draft and returns, per file, the count, short excerpts with line numbers, the size and the hash (so it also answers "did these files change?" without reading them). `replace_in_files` replaces every occurrence of up to 10 exact texts in a list of files or a folder; with `expected_matches` it changes nothing unless the count is the one `search_files` reported. None of them takes patterns: text is matched literally. All writes go through the same draft code as `write_files` (path rules, limits, who changed each file), and files that may hold passwords or keys and other sites' folders are never searched, changed or copied.
+
+**Feedback** (`src/feedback/feedback.ts`). `send_feedback` sends a bug report, a problem or an idea to CR Servers support. The assistant writes the message, shows it to the user and sends it only after they confirm; the tool's description says plainly where the text goes. The connector stores the message with the site, the app's name, the reference of the app's last failed call on that site and, when a draft is named, how many files it changes (never paths or content). It then asks the client area to open a support ticket in the account of the client who owns the hosting service, where staff reply. If the client area can't be reached, the message stays stored and the ticket is retried every 15 minutes for 3 days. One connection can send 10 messages per 24 hours. The upload page and the client area's AI Connect page link to the client area's new-ticket form for the same purpose.
 
 The server's instructions tell the AI to:
 - work in a draft;
@@ -226,6 +231,9 @@ Either way the server applies the rules of `import_from_url`: media only, first 
 | Draft | 200 MB / 2,000 files |
 | One write call | 50 files / 5 MB |
 | `read_file` | 20,000-character pages |
+| `copy_files` | 20 copies / 50 MB per call; replacements on text files up to 1 MB |
+| `search_files`, `replace_in_files` | Text files up to 1 MB; 300 files / 20 MB looked at per call; 100 files returned or changed per call |
+| `send_feedback` | 10 to 2,000 characters; 10 messages per connection per 24 hours |
 | Undo history | Last 5 releases per site |
 | Site guide | 16 KB, UTF-8 text |
 
@@ -245,6 +253,7 @@ A daily job deletes what's past its period (`src/db/cleanup.ts`). The public pri
 | Sign-in requests, one-time codes, owner sign-ins, event nonces | Deleted a day after expiry |
 | Approval requests | 90 days after the decision or expiry |
 | Support records (`support_events`: tool, result, error message, reference id, site, hosting service, OAuth client, app name; also refused connections with the reason and domain) | 30 days |
+| Feedback sent from the chat (`feedback`: the message text, its kind, site, hosting service, OAuth client, app name, reference of the last failed call, draft file counts, ticket number) | 12 months. The support ticket it opens lives in the client area under its own rules |
 | Request logs (stdout) | Not collected by a central log system: they stay in the container log files on the node, rotated by the kubelet, and are lost when the pod is removed. (The cluster's Loki holds only another workload's logs.) IP addresses are anonymized and the lines carry no account, site or service ids (a failed tool call carries only its random reference id), so they hold no personal data |
 
 ## Operations

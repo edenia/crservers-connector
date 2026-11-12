@@ -659,6 +659,282 @@
       "execution": {
         "taskSupport": "forbidden"
       }
+    },
+    {
+      "name": "copy_files",
+      "title": "Copy files in draft",
+      "description": "Copies files to new paths inside the draft stored on CR Servers, without resending their content (the live site doesn't change until publish). Each copy takes the draft version of `from` if the draft changed it, otherwise the live file. Use it to start a new page from an existing one: optional replacements change exact text in the copy (every occurrence; each old_text must appear at least once), and edit_file can change the rest. Refuses a `to` that already exists unless overwrite is true. ≤20 copies per call.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "changeset_id": {
+            "type": "string"
+          },
+          "copies": {
+            "minItems": 1,
+            "maxItems": 20,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "from": {
+                  "type": "string",
+                  "description": "File to copy, e.g. \"proyectos/casa-uno.html\""
+                },
+                "to": {
+                  "type": "string",
+                  "description": "Path of the copy, e.g. \"proyectos/casa-dos.html\""
+                },
+                "replacements": {
+                  "description": "Exact text to change in the copy (text files up to 1 MB), every occurrence, applied in order",
+                  "maxItems": 20,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "old_text": {
+                        "type": "string",
+                        "minLength": 1,
+                        "maxLength": 10000
+                      },
+                      "new_text": {
+                        "description": "Replacement; empty or omitted removes old_text",
+                        "anyOf": [
+                          {
+                            "type": "string",
+                            "maxLength": 100000
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      }
+                    },
+                    "required": [
+                      "old_text"
+                    ]
+                  }
+                }
+              },
+              "required": [
+                "from",
+                "to"
+              ]
+            }
+          },
+          "overwrite": {
+            "default": false,
+            "description": "Replace a file that already exists at `to`",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "changeset_id",
+          "copies"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "title": "Copy files in draft"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "search_files",
+      "title": "Search in files",
+      "description": "Finds exact text in the text files of the live site, or of a draft when changeset_id is given: which files contain it, how many times, and up to 3 short excerpts per file with line numbers. Each file comes with its size and hash, so it also tells whether files changed without reading them. Not a pattern search: the query is matched literally. Looks at ≤300 files per call (text files up to 1 MB); narrow with path or extensions on bigger sites. Files that may hold passwords or keys and other sites' folders are never searched.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "query": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 200,
+            "description": "Exact text to find, e.g. class=\"btn-old\""
+          },
+          "path": {
+            "description": "Folder to search, e.g. \"proyectos\". Omit for the whole site",
+            "type": "string"
+          },
+          "extensions": {
+            "description": "Only files with these extensions, e.g. [\"html\", \"css\"]",
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\.?[A-Za-z0-9]{1,12}$"
+            }
+          },
+          "case_sensitive": {
+            "default": true,
+            "type": "boolean"
+          },
+          "changeset_id": {
+            "type": "string"
+          },
+          "site": {
+            "description": "Domain of the site to work on, e.g. \"example.com\". Needed only when the connection covers several sites (see list_sites); then use the site the user named, and ask them if they have not named one.",
+            "type": "string",
+            "maxLength": 253
+          }
+        },
+        "required": [
+          "query"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": true,
+        "destructiveHint": false,
+        "idempotentHint": true,
+        "openWorldHint": false,
+        "title": "Search in files"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "replace_in_files",
+      "title": "Replace in files (draft)",
+      "description": "Replaces exact text in many text files at once and saves the changed files to the draft stored on CR Servers (kept until published or discarded, at most 24 hours). Reversible: it never changes the live site (only publish does), and the draft can be dropped with discard_changeset. Every occurrence of each old_text is replaced, in the files listed in paths or in every text file of the folder given in path (\"\" for the whole site), on the draft version of a file if the draft changed it. Not a pattern replace: text is matched literally. Run search_files first and pass its total as expected_matches: if the count differs, nothing is changed. ≤100 changed files per call; files that may hold passwords or keys and other sites' folders are never changed.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "changeset_id": {
+            "type": "string"
+          },
+          "replacements": {
+            "minItems": 1,
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "old_text": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 10000
+                },
+                "new_text": {
+                  "description": "Replacement; empty or omitted removes old_text",
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "maxLength": 100000
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "old_text"
+              ]
+            },
+            "description": "Applied in order to each file"
+          },
+          "paths": {
+            "description": "Files to change. Give either paths or path",
+            "minItems": 1,
+            "maxItems": 100,
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "path": {
+            "description": "Folder whose text files are changed, including subfolders; \"\" for the whole site. Give either paths or path",
+            "type": "string"
+          },
+          "extensions": {
+            "description": "Only files with these extensions, e.g. [\"html\", \"css\"]",
+            "maxItems": 10,
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^\\.?[A-Za-z0-9]{1,12}$"
+            }
+          },
+          "expected_matches": {
+            "description": "Total occurrences you expect across all files and replacements (from search_files). When it differs, nothing is changed",
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 9007199254740991
+          }
+        },
+        "required": [
+          "changeset_id",
+          "replacements"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": false,
+        "title": "Replace in files (draft)"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
+    },
+    {
+      "name": "send_feedback",
+      "title": "Send feedback to CR Servers",
+      "description": "Sends the user's feedback about AI Connect to the CR Servers support team. It sends the text in message, together with the site's domain, the name of this app, the reference of the last failed call and (with changeset_id) how many files the draft changes, and opens a support ticket in the user's CR Servers account, where staff reply. No file content is sent. Use it only when the user asks to report a bug, a problem or an idea to CR Servers: write the message in their language, show them the exact text, and send it only after they confirm. Never include passwords, keys or other people's personal data. Not for emergencies such as a site that is down: give the user the contact_support link from get_site_info. ≤10 messages per day.",
+      "inputSchema": {
+        "$schema": "http://json-schema.org/draft-07/schema#",
+        "type": "object",
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bug",
+              "idea",
+              "problem"
+            ],
+            "description": "bug: something works wrong. problem: the user could not do what they wanted. idea: a request or suggestion"
+          },
+          "message": {
+            "type": "string",
+            "minLength": 10,
+            "maxLength": 2000,
+            "description": "The feedback as the user confirmed it: what they were doing, what happened and what they expected"
+          },
+          "changeset_id": {
+            "description": "The draft the feedback is about, if any",
+            "type": "string"
+          },
+          "site": {
+            "description": "Domain of the site to work on, e.g. \"example.com\". Needed only when the connection covers several sites (see list_sites); then use the site the user named, and ask them if they have not named one.",
+            "type": "string",
+            "maxLength": 253
+          }
+        },
+        "required": [
+          "kind",
+          "message"
+        ]
+      },
+      "annotations": {
+        "readOnlyHint": false,
+        "destructiveHint": false,
+        "idempotentHint": false,
+        "openWorldHint": true,
+        "title": "Send feedback to CR Servers"
+      },
+      "execution": {
+        "taskSupport": "forbidden"
+      }
     }
   ]
 }

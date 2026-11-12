@@ -13,6 +13,8 @@ export const RETENTION = {
   approvalDays: 90,
   /** Support records of tool calls and session starts (src/db/support.ts). */
   supportDays: 30,
+  /** Feedback sent from the chat (src/feedback/feedback.ts). */
+  feedbackDays: 365,
 } as const;
 
 export type CleanupCounts = Record<string, number>;
@@ -50,6 +52,8 @@ export async function cleanup(pool: Pool): Promise<CleanupCounts> {
       await run('approvals', `DELETE FROM approvals WHERE COALESCE(decided_at, expires_at) < now() - make_interval(days => $1)`, [RETENTION.approvalDays]);
       // Support records.
       await run('support_events', `DELETE FROM support_events WHERE at < now() - make_interval(days => $1)`, [RETENTION.supportDays]);
+      // Feedback text.
+      await run('feedback', `DELETE FROM feedback WHERE at < now() - make_interval(days => $1)`, [RETENTION.feedbackDays]);
       // Activity log.
       await run('audit_log', `DELETE FROM audit_log WHERE at < now() - make_interval(days => $1)`, [RETENTION.activityDays]);
     } finally {

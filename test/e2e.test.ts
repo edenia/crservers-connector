@@ -4,7 +4,8 @@ import type { AddressInfo } from 'node:net';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { PgClientsStore } from '../src/auth/clients.js';
-import type { ClientAreaApi, ClientAreaGrant, LayoutSite } from '../src/auth/clientarea.js';
+import type { ClientAreaApi, ClientAreaGrant, FeedbackTicket, LayoutSite } from '../src/auth/clientarea.js';
+import { FEEDBACK_PER_DAY, FeedbackService } from '../src/feedback/feedback.js';
 import { DEFAULT_REDIRECT_ALLOWLIST } from '../src/config.js';
 import { LayoutSync } from '../src/auth/layout.js';
 import { ConnectorOAuthProvider } from '../src/auth/provider.js';
@@ -50,8 +51,17 @@ const liveFetches: string[] = [];
 let sitesRepo: SiteRepo;
 /** The client area's current layout per hosting service; unset = what the connector already stores. */
 const layouts = new Map<number, LayoutSite[] | 'down'>();
+/** Feedback tickets the (fake) client area opened; 'down' makes it refuse. */
+const tickets: FeedbackTicket[] = [];
+let ticketsDown = false;
+let feedbackService: FeedbackService;
 const clientArea: ClientAreaApi = {
   exchange: async (code) => caResults.get(code) ?? null,
+  feedback: async (f) => {
+    if (ticketsDown) throw new Error('client area down');
+    tickets.push(f);
+    return { ticket: String(900 + tickets.length) };
+  },
   layout: async (serviceId) => {
     const l = layouts.get(serviceId);
     if (l === 'down') throw new Error('client area down');
@@ -107,8 +117,9 @@ beforeAll(async () => {
     if (url.endsWith('/foto.png')) return { data: Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]), contentType: 'image/png', finalUrl: url };
     return { data: Buffer.from('<!doctype html><p>login</p>'), contentType: 'text/html', finalUrl: url };
   };
-  const uploads = new UploadService({ pool, sites, core, openFs: async () => siteFs, publicUrl: base });
-  const mcp = { core, sites, preview, approvals, uploads, audit, openFs: async () => siteFs, appName, fetchUrl, layout, support: new SupportLog(pool) };
+  const uploads = new UploadService({ pool, sites, core, openFs: async () => siteFs, publicUrl: base, feedbackUrl: `${CA_URL}/tickets/new/` });
+  feedbackService = new FeedbackService(pool, clientArea);
+  const mcp = { core, sites, preview, approvals, uploads, audit, openFs: async () => siteFs, appName, fetchUrl, layout, support: new SupportLog(pool), feedback: feedbackService };
   sitesRepo = sites;
   const clientApi = { pool, sites, audit, appName, reqKey, removeSite: (grantId: string, siteId: string) => provider.removeSite(grantId, siteId) };
   server.on('request', createApp({ provider, issuer: base, mcpUrl, mcp, preview, approvals, uploads, clientApi, openaiAppsChallenge: 'test-challenge-token', events: { pool, sites, reqKey }, rateLimits: false }));
@@ -472,7 +483,7 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     const { tools } = await c.listTools();
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
     expect(Object.keys(byName).sort()).toEqual(
-      ['add_attachments', 'delete_files', 'discard_changeset', 'edit_file', 'import_from_url', 'get_activity_log', 'get_upload_link', 'get_site_info', 'get_usage_limits', 'list_files', 'list_releases', 'list_sites', 'preview_changeset', 'publish', 'read_file', 'revert_release', 'start_changeset', 'write_files'].sort(),
+      ['add_attachments', 'copy_files', 'replace_in_files', 'search_files', 'send_feedback', 'delete_files', 'discard_changeset', 'edit_file', 'import_from_url', 'get_activity_log', 'get_upload_link', 'get_site_info', 'get_usage_limits', 'list_files', 'list_releases', 'list_sites', 'preview_changeset', 'publish', 'read_file', 'revert_release', 'start_changeset', 'write_files'].sort(),
     );
     for (const t of tools) {
       expect(t.annotations, t.name).toMatchObject({ readOnlyHint: expect.any(Boolean), destructiveHint: expect.any(Boolean), openWorldHint: expect.any(Boolean) });
@@ -482,6 +493,11 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     }
     expect(byName.publish!.annotations).toMatchObject({ destructiveHint: true, openWorldHint: true, readOnlyHint: false });
     expect(byName.read_file!.annotations).toMatchObject({ readOnlyHint: true });
+    expect(byName.search_files!.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
+    for (const t of ['copy_files', 'replace_in_files']) expect(byName[t]!.annotations, t).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
+    // Says plainly that the user's text leaves the chat.
+    expect(byName.send_feedback!.annotations).toMatchObject({ readOnlyHint: false, openWorldHint: true });
+    expect(byName.send_feedback!.description).toMatch(/Sends the user's feedback .* to the CR Servers support team/);
     expect(c.getInstructions()).toContain('preview_changeset');
     await c.close();
   });
@@ -1779,5 +1795,250 @@ describe('files that may hold secrets', () => {
     } finally {
       siteFs.files.delete('config.php');
     }
+  });
+});
+
+describe('copy, search and replace across files', () => {
+  const PAGES = ['casa-uno', 'casa-dos', 'casa-tres'];
+  const page = (name: string) => `<html><title>${name}</title>\n<a class="btn-old" href="/">Inicio</a>\n<a class="btn-old" href="/contacto.html">Contacto</a>\n</html>`;
+  const put = () => {
+    for (const n of PAGES) siteFs.put(`proyectos/${n}.html`, page(n));
+    siteFs.put('proyectos/estilos.css', '.btn-old{color:red}');
+    siteFs.put('proyectos/foto.png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 9]));
+    siteFs.put('config.php', "<?php $pass = 'btn-old hunter2';");
+    siteFs.put('secrets/notas.txt', 'btn-old');
+  };
+  const clear = () => {
+    for (const p of [...siteFs.files.keys()]) if (p.startsWith('proyectos/') || p === 'config.php' || p.startsWith('secrets/')) siteFs.files.delete(p);
+  };
+
+  it('search_files finds exact text with counts, excerpts, size and hash; never in files that may hold secrets', async () => {
+    put();
+    try {
+      const c = await mcpClient(await connect('publish'));
+      const all = await call(c, 'search_files', { query: 'btn-old' });
+      expect(all.isError).toBe(false);
+      expect(all.data.files.map((f: Structured) => [f.path, f.matches])).toEqual([
+        ['proyectos/casa-dos.html', 2], ['proyectos/casa-tres.html', 2], ['proyectos/casa-uno.html', 2], ['proyectos/estilos.css', 1],
+      ]);
+      expect(all.data).toMatchObject({ files_with_matches: 4, total_matches: 7 });
+      expect(JSON.stringify(all)).not.toContain('hunter2');
+      const first = all.data.files[0];
+      expect(first.excerpts[0]).toEqual({ line: 2, text: '<a class="btn-old" href="/">Inicio</a>' });
+      // Same hash and size as read_file: a search doubles as a check of what changed.
+      const read = await call(c, 'read_file', { path: first.path });
+      expect(first).toMatchObject({ hash: read.data.hash, size: read.data.size });
+
+      const css = await call(c, 'search_files', { query: 'BTN-OLD', case_sensitive: false, path: 'proyectos', extensions: ['.CSS'] });
+      expect(css.data.files.map((f: Structured) => f.path)).toEqual(['proyectos/estilos.css']);
+      expect((await call(c, 'search_files', { query: 'BTN-OLD' })).data.total_matches).toBe(0);
+      expect((await call(c, 'search_files', { query: 'btn.old' })).data.total_matches).toBe(0); // not a pattern
+
+      // A draft is searched as it would be published.
+      const { data: d } = await call(c, 'start_changeset');
+      await call(c, 'write_files', { changeset_id: d.changeset_id, files: [{ path: 'proyectos/nueva.html', content: 'btn-old' }] });
+      await call(c, 'delete_files', { changeset_id: d.changeset_id, paths: ['proyectos/casa-uno.html'] });
+      const inDraft = await call(c, 'search_files', { query: 'btn-old', path: 'proyectos', extensions: ['html'], changeset_id: d.changeset_id });
+      expect(inDraft.data.files.map((f: Structured) => f.path)).toEqual(['proyectos/casa-dos.html', 'proyectos/casa-tres.html', 'proyectos/nueva.html']);
+      await call(c, 'discard_changeset', { changeset_id: d.changeset_id });
+      await c.close();
+    } finally {
+      clear();
+    }
+  });
+
+  it('replace_in_files changes every occurrence in a folder, in the draft only, and refuses a count it did not expect', async () => {
+    put();
+    try {
+      const c = await mcpClient(await connect('publish'));
+      const { data: d } = await call(c, 'start_changeset');
+      const id = d.changeset_id;
+      const wrong = await call(c, 'replace_in_files', { changeset_id: id, path: '', replacements: [{ old_text: 'btn-old', new_text: 'btn' }], expected_matches: 6 });
+      expect(wrong.isError).toBe(true);
+      expect(wrong.data).toMatchObject({ total_replacements: 7 });
+      expect((await call(c, 'preview_changeset', { changeset_id: id })).data.modified).toEqual([]);
+
+      const both = await call(c, 'replace_in_files', { changeset_id: id, path: '', paths: ['index.html'], replacements: [{ old_text: 'a', new_text: 'b' }] });
+      expect(both.isError).toBe(true);
+
+      const r = await call(c, 'replace_in_files', {
+        changeset_id: id, path: 'proyectos', extensions: ['html'], expected_matches: 9,
+        replacements: [{ old_text: 'class="btn-old"', new_text: 'class="btn"' }, { old_text: '<title>', new_text: '<title>Proyecto: ' }],
+      });
+      expect(r.isError).toBe(false);
+      expect(r.data).toMatchObject({ files_changed: 3, total_replacements: 9, per_replacement: [{ count: 6 }, { count: 3 }] });
+      expect(r.data.files.map((f: Structured) => [f.path, f.replacements])).toEqual([['proyectos/casa-dos.html', 3], ['proyectos/casa-tres.html', 3], ['proyectos/casa-uno.html', 3]]);
+      // Live files are untouched; the draft holds the result.
+      expect(siteFs.text('proyectos/casa-uno.html')).toContain('btn-old');
+      const read = await call(c, 'read_file', { path: 'proyectos/casa-uno.html', changeset_id: id });
+      expect(read.data.text).toBe(page('casa-uno').replaceAll('class="btn-old"', 'class="btn"').replace('<title>', '<title>Proyecto: '));
+      expect(read.data.hash).toBe(r.data.files[2].hash);
+      expect(siteFs.text('proyectos/estilos.css')).toBe('.btn-old{color:red}');
+
+      // Named files: a secret or binary one is skipped and said so; a missing one stops the call.
+      const named = await call(c, 'replace_in_files', { changeset_id: id, paths: ['proyectos/estilos.css', 'config.php', 'proyectos/foto.png'], replacements: [{ old_text: 'btn-old', new_text: 'btn' }] });
+      expect(named.isError).toBe(false);
+      expect(named.data.files.map((f: Structured) => f.path)).toEqual(['proyectos/estilos.css']);
+      expect(named.data.skipped.map((x: Structured) => x.path)).toEqual(['config.php', 'proyectos/foto.png']);
+      expect(JSON.stringify(named)).not.toContain('hunter2');
+      const missing = await call(c, 'replace_in_files', { changeset_id: id, paths: ['proyectos/estilos.css', 'no-existe.html'], replacements: [{ old_text: 'btn', new_text: 'x' }] });
+      expect(missing.isError).toBe(true);
+      expect(missing.data.paths).toEqual(['no-existe.html']);
+
+      const none = await call(c, 'replace_in_files', { changeset_id: id, path: '', replacements: [{ old_text: 'no-such-text-anywhere', new_text: 'x' }] });
+      expect(none.isError).toBe(false);
+      expect(none.data).toMatchObject({ files_changed: 0, total_replacements: 0 });
+
+      const pv = await call(c, 'preview_changeset', { changeset_id: id });
+      expect(pv.data.modified).toEqual(['proyectos/casa-dos.html', 'proyectos/casa-tres.html', 'proyectos/casa-uno.html', 'proyectos/estilos.css']);
+      expect(pv.data.changed_by).toEqual({ ChatGPT: 4 });
+      await call(c, 'discard_changeset', { changeset_id: id });
+      await c.close();
+    } finally {
+      clear();
+    }
+  });
+
+  it('copy_files copies pages inside the draft, with replacements on the copy, and never over an existing file unasked', async () => {
+    put();
+    try {
+      const c = await mcpClient(await connect('publish'));
+      const { data: d } = await call(c, 'start_changeset');
+      const id = d.changeset_id;
+      await call(c, 'edit_file', { changeset_id: id, path: 'proyectos/casa-uno.html', edits: [{ old_text: 'Contacto', new_text: 'Escribanos' }] });
+      const r = await call(c, 'copy_files', {
+        changeset_id: id,
+        copies: [
+          { from: 'proyectos/casa-uno.html', to: 'proyectos/casa-cuatro.html', replacements: [{ old_text: 'casa-uno', new_text: 'casa-cuatro' }, { old_text: 'btn-old', new_text: 'btn' }] },
+          { from: 'proyectos/foto.png', to: 'proyectos/foto-copia.png' },
+          { from: 'proyectos/casa-dos.html', to: 'proyectos/casa-tres.html' },
+          { from: 'proyectos/casa-dos.html', to: 'proyectos/casa-cinco.html', replacements: [{ old_text: 'no-such-text', new_text: 'x' }] },
+          { from: 'config.php', to: 'copia.txt' },
+          { from: 'proyectos/casa-dos.html', to: 'proyectos/shell.php' },
+          { from: 'no-existe.html', to: 'x.html' },
+        ],
+      });
+      expect(r.isError).toBe(false);
+      expect(r.data.results.map((x: Structured) => x.ok)).toEqual([true, true, false, false, false, false, false]);
+      expect(r.data.results[0]).toMatchObject({ replacements: [1, 2], size: expect.any(Number), hash: expect.stringMatching(/^[0-9a-f]{64}$/) });
+      expect(r.data.results[2].error).toContain('overwrite');
+      expect(r.data.results[3].error).toContain('Replacement 1');
+      expect(JSON.stringify(r)).not.toContain('hunter2');
+      // The copy comes from the draft version of the source.
+      const copy = await call(c, 'read_file', { path: 'proyectos/casa-cuatro.html', changeset_id: id });
+      expect(copy.data.text).toBe(page('casa-cuatro').replaceAll('btn-old', 'btn').replace('Contacto', 'Escribanos'));
+      expect((await call(c, 'read_file', { path: 'proyectos/foto-copia.png', changeset_id: id })).data).toMatchObject({ binary: true, size: 10 });
+
+      const over = await call(c, 'copy_files', { changeset_id: id, overwrite: true, copies: [{ from: 'proyectos/casa-dos.html', to: 'proyectos/casa-tres.html' }] });
+      expect(over.data.results[0].ok).toBe(true);
+      const none = await call(c, 'copy_files', { changeset_id: id, copies: [{ from: 'index.html', to: 'index.html' }] });
+      expect(none.isError).toBe(true);
+
+      const pv = await call(c, 'preview_changeset', { changeset_id: id });
+      expect(pv.data.added).toEqual(['proyectos/casa-cuatro.html', 'proyectos/foto-copia.png']);
+      expect(pv.data.modified).toEqual(['proyectos/casa-tres.html', 'proyectos/casa-uno.html']);
+      expect(siteFs.files.has('proyectos/casa-cuatro.html')).toBe(false);
+      await call(c, 'discard_changeset', { changeset_id: id });
+      await c.close();
+    } finally {
+      clear();
+    }
+  });
+
+  it('other sites\' folders are never searched, replaced in or copied', async () => {
+    const setup = sealSetup({ ftp_host: 'iwx41.crservers.com', ftp_user: 'crsconnect@bosque.example', ftp_password: randomBytes(24).toString('base64url') });
+    const r = await connectWith({ client_id: 41, account_id: 89, domain: 'bosque.example', server_id: '6', scope: 'publish', sites: [{ account_id: 89, domain: 'bosque.example', kind: 'main', protected_dirs: ['tienda'], site_setup: setup }] });
+    siteFs.put('tienda/index.html', 'btn-old');
+    siteFs.put('tiendas.html', 'btn-old');
+    try {
+      const c = await mcpClient(r.token!);
+      const found = await call(c, 'search_files', { query: 'btn-old' });
+      expect(found.data.files.map((f: Structured) => f.path)).toEqual(['tiendas.html']);
+      expect(found.data.other_site_folders).toEqual(['tienda']);
+      const { data: d } = await call(c, 'start_changeset');
+      const rep = await call(c, 'replace_in_files', { changeset_id: d.changeset_id, path: '', replacements: [{ old_text: 'btn-old', new_text: 'btn' }] });
+      expect(rep.data.files.map((f: Structured) => f.path)).toEqual(['tiendas.html']);
+      for (const [tool, args] of [
+        ['replace_in_files', { paths: ['tienda/index.html'], replacements: [{ old_text: 'btn-old', new_text: 'btn' }] }],
+        ['copy_files', { copies: [{ from: 'tiendas.html', to: 'tienda/copia.html' }] }],
+        ['copy_files', { copies: [{ from: 'tienda/index.html', to: 'copia.html' }] }],
+      ] as const) {
+        const x = await call(c, tool, { changeset_id: d.changeset_id, ...args });
+        expect(x.isError, tool).toBe(true);
+        expect(x.text, tool).toContain('tienda/');
+      }
+      await call(c, 'discard_changeset', { changeset_id: d.changeset_id });
+      await c.close();
+    } finally {
+      siteFs.files.delete('tienda/index.html');
+      siteFs.files.delete('tiendas.html');
+    }
+  });
+});
+
+describe('send_feedback', () => {
+  it('stores the message with the site, the app and the last failed call, and opens a ticket in the client area', async () => {
+    const c = await mcpClient(await connect('publish'));
+    const failed = await call(c, 'list_files', { path: 'no-existe-feedback' });
+    const ref = /\(ref: ([A-Z2-9]{6})\)/.exec(failed.text)![1];
+    // The support record of the failed call is written after its response.
+    for (let i = 0; i < 50 && !(await pool.query('SELECT 1 FROM support_events WHERE ref = $1', [ref])).rowCount; i++) await new Promise((r) => setTimeout(r, 20));
+    const { data: d } = await call(c, 'start_changeset');
+    await call(c, 'write_files', { changeset_id: d.changeset_id, files: [{ path: 'fb.html', content: 'x' }] });
+    const before = tickets.length;
+    const message = 'Al listar la carpeta de proyectos el asistente recibió un error.';
+    const r = await call(c, 'send_feedback', { kind: 'bug', message, changeset_id: d.changeset_id });
+    expect(r.isError).toBe(false);
+    expect(r.data).toMatchObject({ sent: true, reference: expect.stringMatching(/^[A-Z2-9]{6}$/), ticket: String(900 + before + 1), site: 'uat.example', kind: 'bug' });
+    expect(r.text).toContain(r.data.reference);
+    expect(JSON.stringify(r)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
+    expect(tickets.at(-1)).toEqual({ serviceId: 15, domain: 'uat.example', kind: 'bug', message, reference: r.data.reference, app: 'ChatGPT', lastFailedRef: ref, draft: { added: 1, modified: 0, deleted: 0 } });
+    const row = (await pool.query('SELECT kind, message, domain, service_id, app, last_failed_ref, ticket, delivered_at FROM feedback WHERE ref = $1', [r.data.reference])).rows[0];
+    expect(row).toMatchObject({ kind: 'bug', message, domain: 'uat.example', service_id: 15, app: 'ChatGPT', last_failed_ref: ref, ticket: r.data.ticket });
+    expect(row.delivered_at).toBeTruthy();
+
+    // A draft that is gone doesn't block feedback; too short a message or an unknown kind is refused.
+    await call(c, 'discard_changeset', { changeset_id: d.changeset_id });
+    expect((await call(c, 'send_feedback', { kind: 'idea', message: 'Sería útil poder mover archivos.', changeset_id: d.changeset_id })).isError).toBe(false);
+    expect(tickets.at(-1)!.draft).toBeUndefined();
+    expect((await call(c, 'send_feedback', { kind: 'idea', message: 'corto' })).isError).toBe(true);
+    expect((await call(c, 'send_feedback', { kind: 'queja', message: 'Un mensaje suficientemente largo.' })).isError).toBe(true);
+    await c.close();
+  });
+
+  it('keeps the message when the client area is down and opens the ticket later; limits messages per connection', async () => {
+    const c = await mcpClient(await connect('publish'));
+    ticketsDown = true;
+    const warn = console.warn;
+    const warned: string[] = [];
+    console.warn = (m: string) => warned.push(m);
+    let r: Awaited<ReturnType<typeof call>>;
+    try {
+      r = await call(c, 'send_feedback', { kind: 'problem', message: 'No pude subir las fotos desde el teléfono.' });
+    } finally {
+      console.warn = warn;
+      ticketsDown = false;
+    }
+    expect(r.isError).toBe(false);
+    expect(r.data).toMatchObject({ sent: true, reference: expect.any(String) });
+    expect(r.data.ticket).toBeUndefined();
+    // The log names the reference and the reason, never the text.
+    expect(warned.join('\n')).toContain(r.data.reference);
+    expect(warned.join('\n')).not.toContain('teléfono');
+    const before = tickets.length;
+    expect(await feedbackService.retryUndelivered()).toBe(1);
+    expect(tickets.at(-1)).toMatchObject({ reference: r.data.reference, kind: 'problem' });
+    expect(tickets.length).toBe(before + 1);
+    expect(await feedbackService.retryUndelivered()).toBe(0);
+
+    for (let i = 1; i < FEEDBACK_PER_DAY; i++) expect((await call(c, 'send_feedback', { kind: 'idea', message: `Idea número ${i} para el conector.` })).isError, String(i)).toBe(false);
+    const over = await call(c, 'send_feedback', { kind: 'idea', message: 'Una idea más de la cuenta.' });
+    expect(over.isError).toBe(true);
+    expect(over.text).toContain('crservers.com');
+    // Another connection has its own allowance.
+    const c2 = await mcpClient(await connect('publish'));
+    expect((await call(c2, 'send_feedback', { kind: 'idea', message: 'Desde otra conexión sí pasa.' })).isError).toBe(false);
+    await c.close();
+    await c2.close();
   });
 });

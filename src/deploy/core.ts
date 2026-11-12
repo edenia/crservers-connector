@@ -120,7 +120,8 @@ export function stalePreviewMessage(changed: ChangedFile[]): string {
   return `The draft changed after the last preview: ${changed.length} file(s) (${names}${more}), last change at ${changed[0]!.at} by ${by}. If you did not make these changes, another chat or the upload link did: tell the user. Run preview_changeset again, show the user the new summary and link, and publish only after they confirm`;
 }
 
-const READ_TEXT_LIMIT = 1 * MB;
+/** Text files larger than this are not returned, searched or edited as text. */
+export const READ_TEXT_LIMIT = 1 * MB;
 
 export function sha256(data: Buffer): string {
   return createHash('sha256').update(data).digest('hex');
@@ -300,6 +301,15 @@ export class DeployCore {
   // ---------------------------------------------------------------- reads (no side effects)
 
   async readFile(siteId: string, fs: SiteFs, rawPath: string, draftId?: string): Promise<ReadResult> {
+    const { path, data } = await this.readData(siteId, fs, rawPath, draftId);
+    const result: ReadResult = { path, size: data.length, hash: sha256(data) };
+    if (isSecretPath(path)) result.secret = true;
+    else if (isTextPath(path) && data.length <= READ_TEXT_LIMIT) result.text = data.toString('utf8');
+    return result;
+  }
+
+  /** A file's bytes as the draft sees it (the live file when the draft hasn't changed it). For server-side copies: callers check isSecretPath. */
+  async readData(siteId: string, fs: SiteFs, rawPath: string, draftId?: string): Promise<{ path: string; data: Buffer }> {
     const path = normalizeSitePath(rawPath);
     let data: Buffer | undefined;
     if (draftId) {
@@ -311,10 +321,24 @@ export class DeployCore {
       if (!(await fs.stat(path))) throw new DeployError('not_found', 'File not found');
       data = await fs.read(path);
     }
-    const result: ReadResult = { path, size: data.length, hash: sha256(data) };
-    if (isSecretPath(path)) result.secret = true;
-    else if (isTextPath(path) && data.length <= READ_TEXT_LIMIT) result.text = data.toString('utf8');
-    return result;
+    return { path, data };
+  }
+
+  /**
+   * Every file of the live site, or of the site as a draft would leave it, sorted by path, with a
+   * reader (search and replace across files). The draft is loaded once, not once per file.
+   */
+  async snapshot(siteId: string, fs: SiteFs, draftId?: string): Promise<{ files: { path: string; size: number }[]; read: (path: string) => Promise<Buffer> }> {
+    const sizes = new Map((await fs.walk()).map((e) => [e.path, e.size]));
+    const d = draftId ? await this.getDraft(draftId, siteId) : undefined;
+    if (d) {
+      for (const p of d.deletes) sizes.delete(p);
+      for (const [p, data] of d.writes) sizes.set(p, data.length);
+    }
+    return {
+      files: [...sizes].map(([path, size]) => ({ path, size })).sort((x, y) => x.path.localeCompare(y.path)),
+      read: async (path) => d?.writes.get(path) ?? fs.read(path),
+    };
   }
 
   async listFiles(siteId: string, fs: SiteFs, rawDir?: string, draftId?: string): Promise<SiteEntry[]> {

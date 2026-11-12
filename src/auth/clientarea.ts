@@ -2,6 +2,7 @@
  * Server-to-server calls to the client-area extension that handles sign-in and consent:
  *   POST {CLIENT_AREA_URL}/admin/api.php  call=module&module=crsconnect&fn=exchange&code&rid
  *   POST {CLIENT_AREA_URL}/admin/api.php  call=module&module=crsconnect&fn=layout&service_id  (client area 0.7+)
+ *   POST {CLIENT_AREA_URL}/admin/api.php  call=module&module=crsconnect&fn=feedback&service_id&…  (client area 0.9+)
  * The API key should be limited to the `module` method and IP-locked to our egress.
  */
 export interface ClientAreaGrant {
@@ -76,6 +77,21 @@ export interface ClientAreaApi {
   exchange(code: string, rid: string): Promise<ClientAreaGrant | null>;
   /** The service's current sites and their protected folders. Throws when the client area can't answer. */
   layout?(serviceId: number): Promise<LayoutSite[]>;
+  /** Opens a support ticket in the account of the client who owns the service. Throws when it can't. */
+  feedback?(f: FeedbackTicket): Promise<{ ticket: string }>;
+}
+
+/** Feedback sent from the chat (src/feedback/feedback.ts), as the client area gets it. */
+export interface FeedbackTicket {
+  serviceId: number;
+  domain: string;
+  kind: 'bug' | 'idea' | 'problem';
+  message: string;
+  /** The reference shown to the user in the chat. */
+  reference: string;
+  app: string;
+  lastFailedRef?: string;
+  draft?: { added: number; modified: number; deleted: number };
 }
 
 export class ClientAreaClient implements ClientAreaApi {
@@ -130,5 +146,27 @@ export class ClientAreaClient implements ClientAreaApi {
     }
     if (j.service_id !== serviceId) throw new Error('Unexpected client area layout response');
     return parseLayout(j.sites);
+  }
+
+  async feedback(f: FeedbackTicket): Promise<{ ticket: string }> {
+    const body = new URLSearchParams({
+      api_id: this.apiId, api_key: this.apiKey, call: 'module', module: 'crsconnect', fn: 'feedback',
+      service_id: String(f.serviceId), domain: f.domain, kind: f.kind, message: f.message, reference: f.reference, app: f.app,
+      ...(f.lastFailedRef ? { last_failed_ref: f.lastFailedRef } : {}),
+      ...(f.draft ? { draft: `${f.draft.added},${f.draft.modified},${f.draft.deleted}` } : {}),
+    });
+    const res = await this.fetchImpl(`${this.baseUrl}/admin/api.php`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body,
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!res.ok) throw new Error(`Client area API HTTP ${res.status}`);
+    const j = (await res.json()) as Record<string, unknown>;
+    if (j.success !== true || (typeof j.ticket !== 'string' && typeof j.ticket !== 'number') || !String(j.ticket)) {
+      const reason = [j.error, (j as { errors?: unknown }).errors].flat().filter(Boolean).map(String).join('; ').slice(0, 300);
+      throw new Error(`Client area feedback refused: ${reason || 'no ticket in the answer'}`);
+    }
+    return { ticket: String(j.ticket).slice(0, 40) };
   }
 }

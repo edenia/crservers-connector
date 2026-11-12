@@ -83,12 +83,14 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | Tool | What it does |
 |---|---|
 | `list_sites`, `get_site_info`, `get_usage_limits` | The connected site, its permission and limits |
-| `list_files`, `read_file` | Browse and read (paged for large files) the live site or a draft |
+| `list_files`, `read_file`, `search_files` | Browse, read (paged for large files) and search exact text across the files of the live site or a draft |
 | `start_changeset`, `write_files`, `edit_file`, `delete_files`, `discard_changeset` | Work in a draft |
+| `copy_files`, `replace_in_files` | Copy files inside a draft without resending them (a new page from an existing one), and replace exact text in many files at once |
 | `add_attachments`, `get_upload_link`, `import_from_url` | Bring photos and other media into a draft: attached in the chat (ChatGPT), sent by the assistant or uploaded by the owner through a private one-hour link (Claude and others), or from a public link |
 | `preview_changeset` | What will change, plus the conflict check (required before publishing) |
 | `publish`, `list_releases`, `revert_release` | Go live, see history, undo |
 | `get_activity_log` | Who changed what, and when |
+| `send_feedback` | Sends the user's bug report, problem or idea to CR Servers support as a ticket in their account, after they confirm the text |
 
 Every tool declares its MCP annotations (`readOnlyHint`, `destructiveHint`, `openWorldHint`, `idempotentHint`), so AI hosts ask the user before anything goes live.
 

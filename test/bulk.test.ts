@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { countOccurrences, excerpts, inScope, normalizeExtensions, replaceEvery, skipReason } from '../src/mcp/bulk.js';
+import { TooLarge, countOccurrences, excerpts, inScope, normalizeExtensions, replaceEvery, skipReason } from '../src/mcp/bulk.js';
 
 describe('exact text search and replace', () => {
   it('counts literal, non-overlapping occurrences; regex characters mean nothing', () => {
@@ -19,6 +19,15 @@ describe('exact text search and replace', () => {
     ]);
     expect(r.text).toBe('<a class="btn $& $1">x</a><a class="btn $& $1"/a>');
     expect(r.counts).toEqual([2, 2, 0, 1]);
+  });
+
+  it('refuses a result over the limit before building it', () => {
+    const text = 'a'.repeat(1000);
+    expect(() => replaceEvery(text, [{ old_text: 'a', new_text: 'b'.repeat(2000) }])).toThrow(TooLarge);
+    expect(() => replaceEvery(text, [{ old_text: 'a', new_text: 'bb' }], 1999)).toThrow(TooLarge);
+    expect(replaceEvery(text, [{ old_text: 'a', new_text: 'bb' }], 2000).text.length).toBe(2000);
+    // Each step is checked: growing first and shrinking later doesn't get through.
+    expect(() => replaceEvery(text, [{ old_text: 'a', new_text: 'bbb' }, { old_text: 'bbb', new_text: '' }], 2000)).toThrow(TooLarge);
   });
 
   it('excerpts carry the line number and a short window around the match', () => {

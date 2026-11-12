@@ -29,13 +29,23 @@ export function countOccurrences(text: string, needle: string, caseSensitive = t
   return count;
 }
 
-/** Applies each pair in order to every occurrence; `counts[i]` is how many times pair i matched. */
-export function replaceEvery(text: string, pairs: Replacement[]): { text: string; counts: number[] } {
+/** A replacement would make the text larger than the caller allows. */
+export class TooLarge extends Error {}
+
+/**
+ * Applies each pair in order to every occurrence; `counts[i]` is how many times pair i matched.
+ * The size of the result is worked out before it is built: over `maxChars` it throws TooLarge, so a
+ * short text that matches many times can't be turned into a huge one in memory.
+ */
+export function replaceEvery(text: string, pairs: Replacement[], maxChars = READ_TEXT_LIMIT): { text: string; counts: number[] } {
   const counts: number[] = [];
   for (const p of pairs) {
-    const parts = text.split(p.old_text);
-    counts.push(parts.length - 1);
-    if (parts.length > 1) text = parts.join(p.new_text ?? '');
+    const n = countOccurrences(text, p.old_text);
+    counts.push(n);
+    if (!n) continue;
+    const to = p.new_text ?? '';
+    if (text.length + n * (to.length - p.old_text.length) > maxChars) throw new TooLarge();
+    text = text.split(p.old_text).join(to);
   }
   return { text, counts };
 }

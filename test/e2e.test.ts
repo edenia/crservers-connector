@@ -1885,6 +1885,14 @@ describe('copy, search and replace across files', () => {
       expect(missing.isError).toBe(true);
       expect(missing.data.paths).toEqual(['no-existe.html']);
 
+      // A replacement that would blow a file up is refused before it is built.
+      const huge = await call(c, 'replace_in_files', { changeset_id: id, paths: ['proyectos/casa-dos.html'], replacements: [{ old_text: 'a', new_text: 'x'.repeat(100_000) }, { old_text: 'x', new_text: 'xx' }] });
+      expect(huge.isError).toBe(true);
+      expect(huge.text).toContain('1 MB');
+      const hugeCopy = await call(c, 'copy_files', { changeset_id: id, copies: [{ from: 'proyectos/casa-dos.html', to: 'proyectos/enorme.html', replacements: [{ old_text: 'a', new_text: 'x'.repeat(100_000) }, { old_text: 'x', new_text: 'xx' }] }] });
+      expect(hugeCopy.isError).toBe(true);
+      expect(hugeCopy.data.results[0].error).toContain('1 MB');
+
       const none = await call(c, 'replace_in_files', { changeset_id: id, path: '', replacements: [{ old_text: 'no-such-text-anywhere', new_text: 'x' }] });
       expect(none.isError).toBe(false);
       expect(none.data).toMatchObject({ files_changed: 0, total_replacements: 0 });

@@ -10,7 +10,7 @@ import { deployNote, deployedFrom, readDeployMarker } from '../deploy/deploymark
 import { contactFormInfo, readContactForm } from '../deploy/components.js';
 import { readSiteGuide, siteGuideInfo, siteGuideNote } from '../deploy/siteguide.js';
 import { help, helpInfo, pathHelp } from './help.js';
-import { EXCERPTS_PER_FILE, REPLACE_MAX_FILES, SCAN_MAX_BYTES, SCAN_MAX_FILES, SEARCH_MAX_RESULTS, countOccurrences, excerpts, inScope, normalizeExtensions, replaceEvery, skipReason, type SkipReason } from './bulk.js';
+import { EXCERPTS_PER_FILE, REPLACE_MAX_FILES, SCAN_MAX_BYTES, SCAN_MAX_FILES, SEARCH_MAX_RESULTS, countOccurrences, excerpts, inScope, normalizeExtensions, replaceEvery, skipReason, TooLarge, type SkipReason } from './bulk.js';
 import { FEEDBACK_KINDS, FEEDBACK_MAX_CHARS, FEEDBACK_MIN_CHARS, FEEDBACK_PER_DAY, FeedbackLimit, type FeedbackService } from '../feedback/feedback.js';
 import type { AuditLog } from '../deploy/pgstores.js';
 import type { SiteFs } from '../deploy/sitefs.js';
@@ -78,6 +78,8 @@ const SKIP_TEXT: Record<SkipReason, string> = {
   not_text: 'not a text file',
   too_large: 'text file over 1 MB',
 };
+const TOO_LARGE_TEXT = `El resultado pasaría de ${READ_TEXT_LIMIT / MB} MB de texto. / The result would be over ${READ_TEXT_LIMIT / MB} MB of text.`;
+const TOO_MANY_FILES = `Demasiados archivos para una llamada (límite: ${SCAN_MAX_FILES} archivos o ${SCAN_MAX_BYTES / MB} MB); no se cambió nada. Acote con path, extensions o paths. / Too many files for one call (limit: ${SCAN_MAX_FILES} files or ${SCAN_MAX_BYTES / MB} MB); nothing was changed. Narrow with path, extensions or paths.`;
 const REPLACEMENT = z.object({ old_text: z.string().min(1).max(10_000), new_text: z.string().max(100_000).nullish().describe('Replacement; empty or omitted removes old_text') });
 const EXTENSIONS = z.array(z.string().regex(/^\.?[A-Za-z0-9]{1,12}$/)).max(10).optional().describe('Only files with these extensions, e.g. ["html", "css"]');
 const SECRET_NOTE = 'Este archivo puede contener contraseñas o claves: no se muestra ni se puede cambiar desde aquí. / This file may hold passwords or keys: its content isn\'t shown and it can\'t be changed from here.';
@@ -773,7 +775,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
             if (total > COPY_MAX_BYTES) throw new Error(`More than ${COPY_MAX_BYTES / MB} MB in one call; copy the rest in another call`);
             writes.push({ path: to, content, result });
           } catch (e) {
-            result.error = e instanceof PathError ? `${e.message}.${pathHelp(e.path)}` : (e as Error).message;
+            result.error = e instanceof PathError ? `${e.message}.${pathHelp(e.path)}` : e instanceof TooLarge ? TOO_LARGE_TEXT : (e as Error).message;
           }
         }
         if (writes.length) {
@@ -884,6 +886,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
         const perPair = a.replacements.map(() => 0);
         let scanned = 0;
         let bytes = 0;
+        let outBytes = 0;
         for (const path of targets) {
           const size = sizes.get(path)!;
           const why = skipReason(path, size, site.protectedDirs) ?? writeRefusal(path);
@@ -891,13 +894,21 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
             skipped.push({ path, reason: why in SKIP_TEXT ? SKIP_TEXT[why as SkipReason] : why });
             continue;
           }
-          if (++scanned > SCAN_MAX_FILES || (bytes += size) > SCAN_MAX_BYTES) {
-            return fail(`Demasiados archivos para una llamada (límite: ${SCAN_MAX_FILES} archivos o ${SCAN_MAX_BYTES / MB} MB); no se cambió nada. Acote con path, extensions o paths. / Too many files for one call (limit: ${SCAN_MAX_FILES} files or ${SCAN_MAX_BYTES / MB} MB); nothing was changed. Narrow with path, extensions or paths.`);
+          if (++scanned > SCAN_MAX_FILES || (bytes += size) > SCAN_MAX_BYTES) return fail(TOO_MANY_FILES);
+          let r: ReturnType<typeof replaceEvery>;
+          try {
+            r = replaceEvery((await view.read(path)).toString('utf8'), a.replacements);
+          } catch (e) {
+            if (!(e instanceof TooLarge)) throw e;
+            return fail(`${path}: ${TOO_LARGE_TEXT} No se cambió nada. / Nothing was changed.`, { path });
           }
-          const r = replaceEvery((await view.read(path)).toString('utf8'), a.replacements);
           const n = r.counts.reduce((x, y) => x + y, 0);
           r.counts.forEach((c, i) => (perPair[i]! += c));
-          if (n) changed.push({ path, content: Buffer.from(r.text, 'utf8'), replacements: n });
+          if (!n) continue;
+          const content = Buffer.from(r.text, 'utf8');
+          // The files to write are held in memory until the call ends: the same budget as the files read.
+          if ((outBytes += content.length) > SCAN_MAX_BYTES) return fail(TOO_MANY_FILES);
+          changed.push({ path, content, replacements: n });
         }
         const total = perPair.reduce((x, y) => x + y, 0);
         const counts = {

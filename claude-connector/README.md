@@ -16,12 +16,14 @@ The portal keeps a draft only in the browser tab (**"Draft saved in this tab"**)
 
 ### 1. Connection
 
-- **Server URL:** `https://connect.crservers.com/mcp`. The portal should show *CR Servers · 18 tools · 0 resources · Auth OAuth*.
+- **Server URL:** `https://connect.crservers.com/mcp`. The portal should show *CR Servers · 22 tools · 0 resources · Auth OAuth*.
 - **Users connect to different URLs:** leave unchecked.
 
 ### 2. Tools
 
-18 tools (17 at the time of the review; `get_upload_link` was added in November 2026), each with `annotations.title` (since v0.7.2) and explicit hints. Ignore the "Reference the target API docs" suggestion: it's for tools that send raw API requests, and ours call fixed operations.
+22 tools (17 at the time of the review; `get_upload_link` was added in November 2026, then `copy_files`, `search_files`, `replace_in_files` and `send_feedback`), each with `annotations.title` (since v0.7.2) and explicit hints. Ignore the "Reference the target API docs" suggestion: it's for tools that send raw API requests, and ours call fixed operations.
+
+**Listing edit pending (one edit for five tools).** The listing still shows the 17 tools of the review: the edit for `get_upload_link` (v0.8.6) was never made. After the release with the four new tools is on production, edit the listing once and add all five names: `get_upload_link`, `copy_files`, `search_files`, `replace_in_files`, `send_feedback`. For `send_feedback`, say that it sends the user's confirmed text to CR Servers support and opens a ticket in their account.
 
 ### 3. Listing
 

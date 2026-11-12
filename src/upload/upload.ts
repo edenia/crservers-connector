@@ -95,6 +95,8 @@ export interface UploadDeps {
   core: DeployCore;
   openFs: (siteId: string) => Promise<SiteFs>;
   publicUrl: string;
+  /** Where the page's "Send feedback" link goes: the client area's new support ticket page (sign-in required). */
+  feedbackUrl?: string;
 }
 
 export class UploadService {
@@ -334,7 +336,7 @@ export class UploadService {
     if (req.method !== 'GET' && req.method !== 'HEAD') return void res.status(405).set('allow', 'GET, HEAD, PUT, POST').end();
     if (rest) return void res.status(404).json({ ok: false, error: 'Nothing to download here: this link only takes files (PUT)' });
     const uploaded = (await this.uploaded(target.draftId)).filter((f) => !target.folder || f.path.startsWith(`${target.folder}/`));
-    res.type('html').send(uploadPage(lang, target, uploaded, nonce));
+    res.type('html').send(uploadPage(lang, target, uploaded, nonce, this.d.feedbackUrl));
   }
 }
 
@@ -385,6 +387,8 @@ const T = {
     expires: 'Este enlace funciona durante una hora.',
     expiredTitle: 'Este enlace ya no está disponible',
     expiredBody: 'Venció, o el borrador ya se publicó o se descartó. Pídale a su asistente un enlace nuevo para subir fotos.',
+    feedback: '¿Algo no funcionó o tiene una idea?',
+    feedbackLink: 'Envíe sus comentarios a CR Servers',
   },
   en: {
     title: 'Upload your photos',
@@ -407,6 +411,8 @@ const T = {
     expires: 'This link works for one hour.',
     expiredTitle: 'This link is no longer available',
     expiredBody: 'It expired, or the draft was already published or discarded. Ask your assistant for a new upload link.',
+    feedback: 'Something did not work, or you have an idea?',
+    feedbackLink: 'Send feedback to CR Servers',
   },
 } as const;
 
@@ -416,7 +422,7 @@ ul.up{list-style:none;margin:12px 0 0;padding:0}ul.up li{display:flex;gap:8px;ju
 ul.up .ok{color:#067647;font-weight:700}ul.up .bad{color:#b42318}`;
 
 /** Exported for tests. */
-export function uploadPage(lang: Lang, t: Pick<UploadTarget, 'domain' | 'folder' | 'widths'>, uploaded: UploadedFile[], nonce: string): string {
+export function uploadPage(lang: Lang, t: Pick<UploadTarget, 'domain' | 'folder' | 'widths'>, uploaded: UploadedFile[], nonce: string, feedbackUrl?: string): string {
   const s = T[lang];
   const cfg = { widths: t.widths, max: PHOTO_MAX_PX, quality: PHOTO_QUALITY, t: { sending: s.sending, failed: s.failed, why: s.why } };
   const body = `<style>${PAGE_CSS}</style>
@@ -424,7 +430,7 @@ export function uploadPage(lang: Lang, t: Pick<UploadTarget, 'domain' | 'folder'
 <div class="drop" id="drop"><label><input type="file" id="pick" multiple accept="image/*,video/mp4,video/webm,audio/mpeg,application/pdf"><span class="btn">${s.pick}</span></label><p class="muted small">${s.drop}</p></div>
 <p class="notice small" id="done" hidden role="status">${s.done}</p>
 <ul class="up" id="list" aria-live="polite">${uploaded.map((f) => `<li><span>${esc(f.path)}</span><span class="muted">${s.already}</span></li>`).join('')}</ul>
-<p class="muted small">${s.note} ${s.expires}</p>
+<p class="muted small">${s.note} ${s.expires}</p>${feedbackUrl ? `\n<p class="muted small">${s.feedback} <a href="${esc(feedbackUrl)}" target="_blank" rel="noopener noreferrer">${s.feedbackLink}</a>.</p>` : ''}
 <script nonce="${nonce}">const CFG=${JSON.stringify(cfg).replace(/</g, '\\u003c')};${PAGE_JS}</script>`;
   return page({ lang, title: s.title, body });
 }

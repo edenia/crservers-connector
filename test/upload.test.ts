@@ -35,6 +35,13 @@ describe('upload page', () => {
     expect(html).not.toContain('<b>');
     expect(html).not.toContain('<i>');
     expect(html).toContain('"widths":[800]');
+    expect(html).not.toContain('tickets/new');
+  });
+
+  it('links to the client area\'s new ticket page for feedback, when it knows where that is', () => {
+    const html = uploadPage('en', { domain: 'uat.example', folder: 'img', widths: [] }, [], 'n0nce', 'https://clients.example.test/tickets/new/?a=1&b="2');
+    expect(html).toContain('<a href="https://clients.example.test/tickets/new/?a=1&amp;b=&quot;2" target="_blank" rel="noopener noreferrer">Send feedback to CR Servers</a>');
+    expect(uploadPage('es', { domain: 'uat.example', folder: 'img', widths: [] }, [], 'n0nce', 'https://clients.example.test/tickets/new/')).toContain('Envíe sus comentarios a CR Servers');
   });
 });
 

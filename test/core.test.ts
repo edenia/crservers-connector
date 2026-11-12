@@ -35,6 +35,19 @@ describe('drafts and reads', () => {
     expect((await core.readFile(SITE, fs, 'index.html')).text).toBe('<h1>v1</h1>');
   });
 
+  it('snapshot lists the site as the draft would leave it and reads from the draft first', async () => {
+    const d = await core.startDraft(SITE, fs);
+    const livePaths = (await core.snapshot(SITE, fs)).files.map((f) => f.path);
+    await core.writeFiles(d.id, SITE, fs, [{ path: 'index.html', content: b('<h1>v2</h1>') }, { path: 'zz/new.html', content: b('new') }]);
+    const gone = livePaths.find((p) => p !== 'index.html')!;
+    await core.deleteFiles(d.id, SITE, fs, [gone]);
+    const view = await core.snapshot(SITE, fs, d.id);
+    expect(view.files.map((f) => f.path)).toEqual([...livePaths.filter((p) => p !== gone), 'zz/new.html'].sort((x, y) => x.localeCompare(y)));
+    expect(view.files.find((f) => f.path === 'zz/new.html')!.size).toBe(3);
+    expect((await view.read('index.html')).toString()).toBe('<h1>v2</h1>');
+    expect((await (await core.snapshot(SITE, fs)).read('index.html')).toString()).toBe('<h1>v1</h1>');
+  });
+
   it('rejects disallowed paths per file and keeps the rest', async () => {
     const d = await core.startDraft(SITE, fs);
     const res = await core.writeFiles(d.id, SITE, fs, [

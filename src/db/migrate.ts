@@ -330,6 +330,35 @@ const MIGRATIONS: { id: string; sql: string }[] = [
     id: '015_draft_changes',
     sql: `ALTER TABLE drafts ADD COLUMN changes jsonb NOT NULL DEFAULT '{}'::jsonb;`,
   },
+  {
+    // Feedback sent from the chat (src/feedback/feedback.ts): the user's text with the site and app it
+    // came from, kept 365 days. No foreign keys: feedback outlives the connection and the draft it is about.
+    id: '016_feedback',
+    sql: `
+      CREATE TABLE feedback (
+        id              bigserial PRIMARY KEY,
+        at              timestamptz NOT NULL DEFAULT now(),
+        ref             text NOT NULL,
+        kind            text NOT NULL CHECK (kind IN ('bug', 'idea', 'problem')),
+        message         text NOT NULL,
+        site_id         uuid NOT NULL,
+        service_id      integer NOT NULL,
+        domain          text NOT NULL,
+        grant_id        uuid,
+        client_id       text NOT NULL,
+        app             text,
+        last_failed_ref text,
+        draft           jsonb,
+        ticket          text,
+        delivered_at    timestamptz,
+        attempts        integer NOT NULL DEFAULT 0,
+        next_attempt_at timestamptz NOT NULL DEFAULT now()
+      );
+      CREATE INDEX feedback_at ON feedback (at);
+      CREATE INDEX feedback_grant_at ON feedback (grant_id, at);
+      CREATE INDEX feedback_undelivered ON feedback (next_attempt_at) WHERE delivered_at IS NULL;
+    `,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

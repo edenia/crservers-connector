@@ -1807,6 +1807,8 @@ describe('copy, search and replace across files', () => {
     siteFs.put('proyectos/foto.png', Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 9, 9]));
     siteFs.put('config.php', "<?php $pass = 'btn-old hunter2';");
     siteFs.put('secrets/notas.txt', 'btn-old');
+    siteFs.put('proyectos/viejo.php', '<?php echo "btn-old";');
+    siteFs.put('proyectos/latin1.html', Buffer.concat([Buffer.from('<p class="btn-old">Dise'), Buffer.from([0xf1]), Buffer.from('o</p>')]));
   };
   const clear = () => {
     for (const p of [...siteFs.files.keys()]) if (p.startsWith('proyectos/') || p === 'config.php' || p.startsWith('secrets/')) siteFs.files.delete(p);
@@ -1819,9 +1821,9 @@ describe('copy, search and replace across files', () => {
       const all = await call(c, 'search_files', { query: 'btn-old' });
       expect(all.isError).toBe(false);
       expect(all.data.files.map((f: Structured) => [f.path, f.matches])).toEqual([
-        ['proyectos/casa-dos.html', 2], ['proyectos/casa-tres.html', 2], ['proyectos/casa-uno.html', 2], ['proyectos/estilos.css', 1],
+        ['proyectos/casa-dos.html', 2], ['proyectos/casa-tres.html', 2], ['proyectos/casa-uno.html', 2], ['proyectos/estilos.css', 1], ['proyectos/latin1.html', 1], ['proyectos/viejo.php', 1],
       ]);
-      expect(all.data).toMatchObject({ files_with_matches: 4, total_matches: 7 });
+      expect(all.data).toMatchObject({ files_with_matches: 6, total_matches: 9 });
       expect(JSON.stringify(all)).not.toContain('hunter2');
       const first = all.data.files[0];
       expect(first.excerpts[0]).toEqual({ line: 2, text: '<a class="btn-old" href="/">Inicio</a>' });
@@ -1839,7 +1841,7 @@ describe('copy, search and replace across files', () => {
       await call(c, 'write_files', { changeset_id: d.changeset_id, files: [{ path: 'proyectos/nueva.html', content: 'btn-old' }] });
       await call(c, 'delete_files', { changeset_id: d.changeset_id, paths: ['proyectos/casa-uno.html'] });
       const inDraft = await call(c, 'search_files', { query: 'btn-old', path: 'proyectos', extensions: ['html'], changeset_id: d.changeset_id });
-      expect(inDraft.data.files.map((f: Structured) => f.path)).toEqual(['proyectos/casa-dos.html', 'proyectos/casa-tres.html', 'proyectos/nueva.html']);
+      expect(inDraft.data.files.map((f: Structured) => f.path)).toEqual(['proyectos/casa-dos.html', 'proyectos/casa-tres.html', 'proyectos/latin1.html', 'proyectos/nueva.html']);
       await call(c, 'discard_changeset', { changeset_id: d.changeset_id });
       await c.close();
     } finally {
@@ -1861,6 +1863,9 @@ describe('copy, search and replace across files', () => {
       const both = await call(c, 'replace_in_files', { changeset_id: id, path: '', paths: ['index.html'], replacements: [{ old_text: 'a', new_text: 'b' }] });
       expect(both.isError).toBe(true);
 
+      const same = await call(c, 'replace_in_files', { changeset_id: id, path: '', replacements: [{ old_text: 'btn-old', new_text: 'btn-old' }] });
+      expect(same.isError).toBe(true);
+
       const r = await call(c, 'replace_in_files', {
         changeset_id: id, path: 'proyectos', extensions: ['html'], expected_matches: 9,
         replacements: [{ old_text: 'class="btn-old"', new_text: 'class="btn"' }, { old_text: '<title>', new_text: '<title>Proyecto: ' }],
@@ -1874,6 +1879,21 @@ describe('copy, search and replace across files', () => {
       expect(read.data.text).toBe(page('casa-uno').replaceAll('class="btn-old"', 'class="btn"').replace('<title>', '<title>Proyecto: '));
       expect(read.data.hash).toBe(r.data.files[2].hash);
       expect(siteFs.text('proyectos/estilos.css')).toBe('.btn-old{color:red}');
+      // A page in another encoding is left alone (rewriting it would damage its accents) and said so;
+      // server code in the folder is not part of the replace and not listed.
+      expect(r.data.skipped).toEqual([{ path: 'proyectos/latin1.html', reason: 'not UTF-8 text' }]);
+      expect(r.data.skipped_total).toBe(1);
+      expect((await call(c, 'read_file', { path: 'proyectos/viejo.php', changeset_id: id })).data.text).toContain('btn-old');
+
+      // Two replaces at the same time on the same files: each works on what the other left, none is lost.
+      const [p1, p2] = await Promise.all([
+        call(c, 'replace_in_files', { changeset_id: id, path: 'proyectos', extensions: ['html'], replacements: [{ old_text: 'Inicio', new_text: 'Portada' }] }),
+        call(c, 'replace_in_files', { changeset_id: id, path: 'proyectos', extensions: ['html'], replacements: [{ old_text: '/contacto.html', new_text: '/escribanos.html' }] }),
+      ]);
+      expect([p1.isError, p2.isError]).toEqual([false, false]);
+      const merged = (await call(c, 'read_file', { path: 'proyectos/casa-dos.html', changeset_id: id })).data.text;
+      expect(merged).toContain('Portada');
+      expect(merged).toContain('/escribanos.html');
 
       // Named files: a secret or binary one is skipped and said so; a missing one stops the call.
       const named = await call(c, 'replace_in_files', { changeset_id: id, paths: ['proyectos/estilos.css', 'config.php', 'proyectos/foto.png'], replacements: [{ old_text: 'btn-old', new_text: 'btn' }] });
@@ -1924,10 +1944,13 @@ describe('copy, search and replace across files', () => {
           { from: 'config.php', to: 'copia.txt' },
           { from: 'proyectos/casa-dos.html', to: 'proyectos/shell.php' },
           { from: 'no-existe.html', to: 'x.html' },
+          { from: 'proyectos/latin1.html', to: 'proyectos/latin1-b.html', replacements: [{ old_text: 'btn-old', new_text: 'btn' }] },
+          { from: 'proyectos/latin1.html', to: 'proyectos/latin1-c.html' },
         ],
       });
       expect(r.isError).toBe(false);
-      expect(r.data.results.map((x: Structured) => x.ok)).toEqual([true, true, false, false, false, false, false]);
+      expect(r.data.results.map((x: Structured) => x.ok)).toEqual([true, true, false, false, false, false, false, false, true]);
+      expect(r.data.results[7].error).toContain('UTF-8');
       expect(r.data.results[0]).toMatchObject({ replacements: [1, 2], size: expect.any(Number), hash: expect.stringMatching(/^[0-9a-f]{64}$/) });
       expect(r.data.results[2].error).toContain('overwrite');
       expect(r.data.results[3].error).toContain('Replacement 1');
@@ -1943,7 +1966,7 @@ describe('copy, search and replace across files', () => {
       expect(none.isError).toBe(true);
 
       const pv = await call(c, 'preview_changeset', { changeset_id: id });
-      expect(pv.data.added).toEqual(['proyectos/casa-cuatro.html', 'proyectos/foto-copia.png']);
+      expect(pv.data.added).toEqual(['proyectos/casa-cuatro.html', 'proyectos/foto-copia.png', 'proyectos/latin1-c.html']);
       expect(pv.data.modified).toEqual(['proyectos/casa-tres.html', 'proyectos/casa-uno.html']);
       expect(siteFs.files.has('proyectos/casa-cuatro.html')).toBe(false);
       await call(c, 'discard_changeset', { changeset_id: id });
@@ -2011,6 +2034,7 @@ describe('send_feedback', () => {
     expect(tickets.at(-1)!.draft).toBeUndefined();
     expect((await call(c, 'send_feedback', { kind: 'idea', message: 'corto' })).isError).toBe(true);
     expect((await call(c, 'send_feedback', { kind: 'queja', message: 'Un mensaje suficientemente largo.' })).isError).toBe(true);
+    expect((await call(c, 'send_feedback', { kind: 'idea', message: 'Un mensaje con un car\u0000cter nulo.' })).isError).toBe(true);
     await c.close();
   });
 
@@ -2034,12 +2058,18 @@ describe('send_feedback', () => {
     expect(warned.join('\n')).toContain(r.data.reference);
     expect(warned.join('\n')).not.toContain('teléfono');
     const before = tickets.length;
-    expect(await feedbackService.retryUndelivered()).toBe(1);
+    // The delivery that just failed owns the row for a few minutes: a retry job running now leaves it alone.
+    expect(await feedbackService.retryUndelivered()).toBe(0);
+    await pool.query('UPDATE feedback SET next_attempt_at = now() WHERE ref = $1', [r.data.reference]);
+    // Two retry jobs at once (two replicas): the row is claimed by one.
+    expect((await Promise.all([feedbackService.retryUndelivered(), feedbackService.retryUndelivered()])).sort()).toEqual([0, 1]);
     expect(tickets.at(-1)).toMatchObject({ reference: r.data.reference, kind: 'problem' });
     expect(tickets.length).toBe(before + 1);
     expect(await feedbackService.retryUndelivered()).toBe(0);
 
-    for (let i = 1; i < FEEDBACK_PER_DAY; i++) expect((await call(c, 'send_feedback', { kind: 'idea', message: `Idea número ${i} para el conector.` })).isError, String(i)).toBe(false);
+    // The rest of the day's allowance and three more, all at once: exactly the allowance gets through.
+    const burst = await Promise.all(Array.from({ length: FEEDBACK_PER_DAY + 2 }, (_, i) => call(c, 'send_feedback', { kind: 'idea', message: `Idea número ${i} para el conector.` })));
+    expect(burst.filter((x) => !x.isError).length).toBe(FEEDBACK_PER_DAY - 1);
     const over = await call(c, 'send_feedback', { kind: 'idea', message: 'Una idea más de la cuenta.' });
     expect(over.isError).toBe(true);
     expect(over.text).toContain('crservers.com');

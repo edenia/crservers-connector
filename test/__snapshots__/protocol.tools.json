@@ -908,6 +908,7 @@
             "type": "string",
             "minLength": 10,
             "maxLength": 2000,
+            "pattern": "^[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f]*$",
             "description": "The feedback as the user confirmed it: what they were doing, what happened and what they expected"
           },
           "changeset_id": {

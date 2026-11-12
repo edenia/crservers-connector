@@ -62,6 +62,18 @@ export interface ReadResult {
   secret?: boolean;
 }
 
+/** The files of a site as the live site or a draft holds them (DeployCore.snapshot). */
+export interface SiteView {
+  files: { path: string; size: number }[];
+  read: (path: string) => Promise<Buffer>;
+}
+
+export interface WriteResult {
+  path: string;
+  ok: boolean;
+  error?: string;
+}
+
 export interface PreviewSummary {
   added: string[];
   modified: string[];
@@ -328,7 +340,7 @@ export class DeployCore {
    * Every file of the live site, or of the site as a draft would leave it, sorted by path, with a
    * reader (search and replace across files). The draft is loaded once, not once per file.
    */
-  async snapshot(siteId: string, fs: SiteFs, draftId?: string): Promise<{ files: { path: string; size: number }[]; read: (path: string) => Promise<Buffer> }> {
+  async snapshot(siteId: string, fs: SiteFs, draftId?: string): Promise<SiteView> {
     const sizes = new Map((await fs.walk()).map((e) => [e.path, e.size]));
     const d = draftId ? await this.getDraft(draftId, siteId) : undefined;
     if (d) {
@@ -339,6 +351,18 @@ export class DeployCore {
       files: [...sizes].map(([path, size]) => ({ path, size })).sort((x, y) => x.path.localeCompare(y.path)),
       read: async (path) => d?.writes.get(path) ?? fs.read(path),
     };
+  }
+
+  /**
+   * Reads the draft's view of the site, lets `plan` work out new file contents from it, and writes
+   * them, all under the draft lock: a change that depends on what the files hold (copy, replace
+   * across files) can't be based on a state another call or an upload has since replaced.
+   */
+  async rewrite<T>(draftId: string, siteId: string, fs: SiteFs, by: string, plan: (view: SiteView) => Promise<{ files: FileInput[]; finish: (written: WriteResult[]) => T }>): Promise<T> {
+    return this.withDraftLock(draftId, async () => {
+      const { files, finish } = await plan(await this.snapshot(siteId, fs, draftId));
+      return finish(files.length ? await this.writeFilesNow(draftId, siteId, fs, files, by) : []);
+    });
   }
 
   async listFiles(siteId: string, fs: SiteFs, rawDir?: string, draftId?: string): Promise<SiteEntry[]> {

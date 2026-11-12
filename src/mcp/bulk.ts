@@ -21,12 +21,31 @@ export interface Replacement {
   new_text?: string | null;
 }
 
+/**
+ * Where `needle` starts in `text`, non-overlapping. Positions are always in `text` itself: lower-casing
+ * can change a text's length ("İ"), so when it does the case-insensitive search runs as an escaped
+ * pattern on the original instead.
+ */
+export function findAll(text: string, needle: string, caseSensitive = true, max = Infinity): number[] {
+  const at: number[] = [];
+  if (!needle) return at;
+  let h = text;
+  let n = needle;
+  if (!caseSensitive) {
+    h = text.toLowerCase();
+    n = needle.toLowerCase();
+    if (h.length !== text.length || n.length !== needle.length) {
+      const re = new RegExp(needle.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi');
+      for (let m = re.exec(text); m && at.length < max; m = re.exec(text)) at.push(m.index);
+      return at;
+    }
+  }
+  for (let i = h.indexOf(n); i !== -1 && at.length < max; i = h.indexOf(n, i + n.length)) at.push(i);
+  return at;
+}
+
 export function countOccurrences(text: string, needle: string, caseSensitive = true): number {
-  if (!needle) return 0;
-  const [h, n] = caseSensitive ? [text, needle] : [text.toLowerCase(), needle.toLowerCase()];
-  let count = 0;
-  for (let i = h.indexOf(n); i !== -1; i = h.indexOf(n, i + n.length)) count++;
-  return count;
+  return findAll(text, needle, caseSensitive).length;
 }
 
 /** A replacement would make the text larger than the caller allows. */
@@ -52,13 +71,12 @@ export function replaceEvery(text: string, pairs: Replacement[], maxChars = READ
 
 /** The first matches of a file, each on one line with its line number, cut to a short window around the match. */
 export function excerpts(text: string, needle: string, caseSensitive = true, max = EXCERPTS_PER_FILE): { line: number; text: string }[] {
-  const [h, n] = caseSensitive ? [text, needle] : [text.toLowerCase(), needle.toLowerCase()];
   const out: { line: number; text: string }[] = [];
   let line = 1;
-  let counted = 0;
-  for (let i = h.indexOf(n); i !== -1 && out.length < max; i = h.indexOf(n, i + n.length)) {
-    for (let j = h.indexOf('\n', counted); j !== -1 && j < i; j = h.indexOf('\n', j + 1)) line++;
-    counted = i;
+  let pos = 0;
+  for (const i of findAll(text, needle, caseSensitive, max)) {
+    for (let j = text.indexOf('\n', pos); j !== -1 && j < i; j = text.indexOf('\n', j + 1)) line++;
+    pos = i;
     const lineStart = text.lastIndexOf('\n', i - 1) + 1;
     const nl = text.indexOf('\n', i);
     const lineEnd = nl === -1 ? text.length : nl;

@@ -350,11 +350,13 @@ const MIGRATIONS: { id: string; sql: string }[] = [
         last_failed_ref text,
         draft           jsonb,
         ticket          text,
-        delivered_at    timestamptz
+        delivered_at    timestamptz,
+        attempts        integer NOT NULL DEFAULT 0,
+        next_attempt_at timestamptz NOT NULL DEFAULT now()
       );
       CREATE INDEX feedback_at ON feedback (at);
       CREATE INDEX feedback_grant_at ON feedback (grant_id, at);
-      CREATE INDEX feedback_undelivered ON feedback (at) WHERE delivered_at IS NULL;
+      CREATE INDEX feedback_undelivered ON feedback (next_attempt_at) WHERE delivered_at IS NULL;
     `,
   },
 ];

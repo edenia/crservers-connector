@@ -1,3 +1,4 @@
+import { isUtf8 } from 'node:buffer';
 import { newRef } from '../crypto.js';
 import type { SupportLog } from '../db/support.js';
 import { McpServer, type AuthInfo, type CallToolResult, type ListToolsResult } from '@modelcontextprotocol/server';
@@ -78,6 +79,9 @@ const SKIP_TEXT: Record<SkipReason, string> = {
   not_text: 'not a text file',
   too_large: 'text file over 1 MB',
 };
+/** Skipped files a replace lists by name. */
+const SKIPPED_LIST_MAX = 20;
+const NOT_UTF8_TEXT = 'This file is not UTF-8 text; replacing in it would damage its accents and symbols';
 const TOO_LARGE_TEXT = `El resultado pasaría de ${READ_TEXT_LIMIT / MB} MB de texto. / The result would be over ${READ_TEXT_LIMIT / MB} MB of text.`;
 const TOO_MANY_FILES = `Demasiados archivos para una llamada (límite: ${SCAN_MAX_FILES} archivos o ${SCAN_MAX_BYTES / MB} MB); no se cambió nada. Acote con path, extensions o paths. / Too many files for one call (limit: ${SCAN_MAX_FILES} files or ${SCAN_MAX_BYTES / MB} MB); nothing was changed. Narrow with path, extensions or paths.`;
 const REPLACEMENT = z.object({ old_text: z.string().min(1).max(10_000), new_text: z.string().max(100_000).nullish().describe('Replacement; empty or omitted removes old_text') });
@@ -743,51 +747,57 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
       run({ changesetId: a.changeset_id }, async ({ site, by }, fs) => {
         const refused = refuseOtherSites(site, a.copies.flatMap((c) => [c.from, c.to]));
         if (refused) return refused;
-        const f = await fs();
-        const view = await deps.core.snapshot(site.id, f, a.changeset_id);
-        const exists = new Set(view.files.map((x) => x.path));
         type CopyResult = { from: string; to: string; ok: boolean; size?: number; hash?: string; replacements?: number[]; error?: string };
-        const results: CopyResult[] = [];
-        const writes: { path: string; content: Buffer; result: CopyResult }[] = [];
-        let total = 0;
-        for (const c of a.copies) {
-          const result: CopyResult = { from: c.from, to: c.to, ok: false };
-          results.push(result);
-          try {
-            const from = (result.from = normalizeSitePath(c.from));
-            const to = (result.to = normalizeSitePath(c.to));
-            if (from === to) throw new Error('from and to are the same file');
-            if (isSecretPath(from)) throw new Error('This file may hold passwords or keys and can\'t be copied from here');
-            if (!exists.has(from)) throw new Error('File not found');
-            assertWritable(to);
-            if (writes.some((w) => w.path === to)) throw new Error('Another copy in this call already writes this path');
-            if (exists.has(to) && !a.overwrite) throw new Error('A file already exists at this path; pass overwrite: true to replace it');
-            let content = await view.read(from);
-            if (c.replacements?.length) {
-              if (!isTextPath(from) || content.length > READ_TEXT_LIMIT) throw new Error('Replacements work only on text files up to 1 MB');
-              const r = replaceEvery(content.toString('utf8'), c.replacements);
-              const missing = r.counts.findIndex((n) => n === 0);
-              if (missing !== -1) throw new Error(`Replacement ${missing + 1}: old_text not found in ${from}`);
-              content = Buffer.from(r.text, 'utf8');
-              result.replacements = r.counts;
+        return deps.core.rewrite(a.changeset_id, site.id, await fs(), await by(), async (view) => {
+          const sizes = new Map(view.files.map((x) => [x.path, x.size]));
+          const results: CopyResult[] = [];
+          const writes: { path: string; content: Buffer; result: CopyResult }[] = [];
+          let total = 0;
+          for (const c of a.copies) {
+            const result: CopyResult = { from: c.from, to: c.to, ok: false };
+            results.push(result);
+            try {
+              const from = (result.from = normalizeSitePath(c.from));
+              const to = (result.to = normalizeSitePath(c.to));
+              if (from === to) throw new Error('from and to are the same file');
+              if (isSecretPath(from)) throw new Error('This file may hold passwords or keys and can\'t be copied from here');
+              const size = sizes.get(from);
+              if (size === undefined) throw new Error('File not found');
+              assertWritable(to);
+              if (writes.some((w) => w.path === to)) throw new Error('Another copy in this call already writes this path');
+              if (sizes.has(to) && !a.overwrite) throw new Error('A file already exists at this path; pass overwrite: true to replace it');
+              // Sizes are checked before the file is read: a copy is held in memory until the call ends.
+              if (size > maxFileBytes(to)) throw new Error(`File too large (max ${maxFileBytes(to) / MB} MB)`);
+              if (total + size > COPY_MAX_BYTES) throw new Error(`More than ${COPY_MAX_BYTES / MB} MB in one call; copy the rest in another call`);
+              let content = await view.read(from);
+              if (c.replacements?.length) {
+                if (!isTextPath(from) || content.length > READ_TEXT_LIMIT) throw new Error('Replacements work only on text files up to 1 MB');
+                if (!isUtf8(content)) throw new Error(NOT_UTF8_TEXT);
+                const r = replaceEvery(content.toString('utf8'), c.replacements);
+                const missing = r.counts.findIndex((n) => n === 0);
+                if (missing !== -1) throw new Error(`Replacement ${missing + 1}: old_text not found in ${from}`);
+                content = Buffer.from(r.text, 'utf8');
+                result.replacements = r.counts;
+              }
+              total += content.length;
+              writes.push({ path: to, content, result });
+            } catch (e) {
+              result.error = e instanceof PathError ? `${e.message}.${pathHelp(e.path)}` : e instanceof TooLarge ? TOO_LARGE_TEXT : (e as Error).message;
             }
-            total += content.length;
-            if (total > COPY_MAX_BYTES) throw new Error(`More than ${COPY_MAX_BYTES / MB} MB in one call; copy the rest in another call`);
-            writes.push({ path: to, content, result });
-          } catch (e) {
-            result.error = e instanceof PathError ? `${e.message}.${pathHelp(e.path)}` : e instanceof TooLarge ? TOO_LARGE_TEXT : (e as Error).message;
           }
-        }
-        if (writes.length) {
-          const written = await deps.core.writeFiles(a.changeset_id, site.id, f, writes.map((w) => ({ path: w.path, content: w.content })), await by());
-          for (const [i, w] of writes.entries()) {
-            if (written[i]?.ok) Object.assign(w.result, { ok: true, size: w.content.length, hash: sha256(w.content) });
-            else w.result.error = written[i]?.error ?? 'Could not stage the copy';
-          }
-        }
-        const okCount = results.filter((r) => r.ok).length;
-        const summary = `${okCount} de ${results.length} copias en el borrador. / ${okCount} of ${results.length} copies staged.`;
-        return okCount ? ok(summary, { results }) : fail(summary, { results });
+          return {
+            files: writes.map((w) => ({ path: w.path, content: w.content })),
+            finish: (written) => {
+              for (const [i, w] of writes.entries()) {
+                if (written[i]?.ok) Object.assign(w.result, { ok: true, size: w.content.length, hash: sha256(w.content) });
+                else w.result.error = written[i]?.error ?? 'Could not stage the copy';
+              }
+              const okCount = results.filter((r) => r.ok).length;
+              const summary = `${okCount} de ${results.length} copias en el borrador. / ${okCount} of ${results.length} copies staged.`;
+              return okCount ? ok(summary, { results }) : fail(summary, { results });
+            },
+          };
+        });
       })(),
   );
 
@@ -865,73 +875,89 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
     (a) =>
       run({ changesetId: a.changeset_id }, async ({ site, by }, fs) => {
         if ((a.paths === undefined) === (a.path === undefined)) return fail('Indique paths (lista de archivos) o path (carpeta), uno de los dos. / Give either paths (a list of files) or path (a folder), not both.');
-        const f = await fs();
-        const view = await deps.core.snapshot(site.id, f, a.changeset_id);
-        const sizes = new Map(view.files.map((x) => [x.path, x.size]));
-        const skipped: { path: string; reason: string }[] = [];
-        let targets: string[];
+        const same = a.replacements.findIndex((r) => r.old_text === (r.new_text ?? ''));
+        if (same !== -1) return fail(`Reemplazo ${same + 1}: old_text y new_text son iguales. / Replacement ${same + 1}: old_text and new_text are the same.`);
         if (a.paths) {
           const refused = refuseOtherSites(site, a.paths);
           if (refused) return refused;
-          targets = [...new Set(a.paths.map(normalizeSitePath))];
-          const missing = targets.filter((p) => !sizes.has(p));
-          if (missing.length) return fail('No encontrado; no se cambió nada. / Not found; nothing was changed.', { paths: missing });
-        } else {
-          const dir = normalizeSiteDir(a.path);
-          const ext = normalizeExtensions(a.extensions);
-          // In a folder, files that can't be read as text are simply not part of the replace.
-          targets = view.files.filter((x) => inScope(x.path, dir, ext) && !skipReason(x.path, x.size, site.protectedDirs)).map((x) => x.path);
         }
-        const changed: { path: string; content: Buffer; replacements: number }[] = [];
-        const perPair = a.replacements.map(() => 0);
-        let scanned = 0;
-        let bytes = 0;
-        let outBytes = 0;
-        for (const path of targets) {
-          const size = sizes.get(path)!;
-          const why = skipReason(path, size, site.protectedDirs) ?? writeRefusal(path);
-          if (why) {
-            skipped.push({ path, reason: why in SKIP_TEXT ? SKIP_TEXT[why as SkipReason] : why });
-            continue;
+        return deps.core.rewrite(a.changeset_id, site.id, await fs(), await by(), async (view) => {
+          const stop = (result: CallToolResult) => ({ files: [], finish: () => result });
+          const sizes = new Map(view.files.map((x) => [x.path, x.size]));
+          const skipped: { path: string; reason: string }[] = [];
+          let targets: string[];
+          if (a.paths) {
+            targets = [...new Set(a.paths.map(normalizeSitePath))];
+            const missing = targets.filter((p) => !sizes.has(p));
+            if (missing.length) return stop(fail('No encontrado; no se cambió nada. / Not found; nothing was changed.', { paths: missing }));
+          } else {
+            const dir = normalizeSiteDir(a.path);
+            const ext = normalizeExtensions(a.extensions);
+            // In a folder, files that can't be read as text or written from here are simply not part of the replace.
+            targets = view.files.filter((x) => inScope(x.path, dir, ext) && !skipReason(x.path, x.size, site.protectedDirs) && !writeRefusal(x.path)).map((x) => x.path);
           }
-          if (++scanned > SCAN_MAX_FILES || (bytes += size) > SCAN_MAX_BYTES) return fail(TOO_MANY_FILES);
-          let r: ReturnType<typeof replaceEvery>;
-          try {
-            r = replaceEvery((await view.read(path)).toString('utf8'), a.replacements);
-          } catch (e) {
-            if (!(e instanceof TooLarge)) throw e;
-            return fail(`${path}: ${TOO_LARGE_TEXT} No se cambió nada. / Nothing was changed.`, { path });
+          const changed: { path: string; content: Buffer; base: string; replacements: number }[] = [];
+          const perPair = a.replacements.map(() => 0);
+          let scanned = 0;
+          let bytes = 0;
+          let outBytes = 0;
+          for (const path of targets) {
+            const size = sizes.get(path)!;
+            const why = skipReason(path, size, site.protectedDirs) ?? writeRefusal(path);
+            if (why) {
+              skipped.push({ path, reason: why in SKIP_TEXT ? SKIP_TEXT[why as SkipReason] : why });
+              continue;
+            }
+            if (++scanned > SCAN_MAX_FILES || (bytes += size) > SCAN_MAX_BYTES) return stop(fail(TOO_MANY_FILES));
+            const data = await view.read(path);
+            // Text in another encoding would come back damaged from a rewrite: left alone.
+            if (!isUtf8(data)) {
+              skipped.push({ path, reason: 'not UTF-8 text' });
+              continue;
+            }
+            let r: ReturnType<typeof replaceEvery>;
+            try {
+              r = replaceEvery(data.toString('utf8'), a.replacements);
+            } catch (e) {
+              if (!(e instanceof TooLarge)) throw e;
+              return stop(fail(`${path}: ${TOO_LARGE_TEXT} No se cambió nada. / Nothing was changed.`, { path }));
+            }
+            const n = r.counts.reduce((x, y) => x + y, 0);
+            r.counts.forEach((c, i) => (perPair[i]! += c));
+            if (!n) continue;
+            const content = Buffer.from(r.text, 'utf8');
+            // The files to write are held in memory until the call ends: the same budget as the files read.
+            if ((outBytes += content.length) > SCAN_MAX_BYTES) return stop(fail(TOO_MANY_FILES));
+            changed.push({ path, content, base: sha256(data), replacements: n });
           }
-          const n = r.counts.reduce((x, y) => x + y, 0);
-          r.counts.forEach((c, i) => (perPair[i]! += c));
-          if (!n) continue;
-          const content = Buffer.from(r.text, 'utf8');
-          // The files to write are held in memory until the call ends: the same budget as the files read.
-          if ((outBytes += content.length) > SCAN_MAX_BYTES) return fail(TOO_MANY_FILES);
-          changed.push({ path, content, replacements: n });
-        }
-        const total = perPair.reduce((x, y) => x + y, 0);
-        const counts = {
-          total_replacements: total,
-          per_replacement: a.replacements.map((r, i) => ({ old_text: r.old_text.length > 80 ? `${r.old_text.slice(0, 80)}…` : r.old_text, count: perPair[i] })),
-          files_searched: scanned,
-          ...(skipped.length ? { skipped } : {}),
-        };
-        const perFile = changed.map((c) => ({ path: c.path, replacements: c.replacements }));
-        if (a.expected_matches !== undefined && a.expected_matches !== total) {
-          return fail(`Se esperaban ${a.expected_matches} coincidencias y hay ${total}; no se cambió nada. Revise con search_files. / Expected ${a.expected_matches} matches, found ${total}; nothing was changed. Check with search_files.`, { ...counts, files: perFile });
-        }
-        if (changed.length > REPLACE_MAX_FILES) {
-          return fail(`El cambio toca ${changed.length} archivos (máximo ${REPLACE_MAX_FILES} por llamada); no se cambió nada. Divídalo por carpeta. / The change touches ${changed.length} files (${REPLACE_MAX_FILES} per call at most); nothing was changed. Split it by folder.`, counts);
-        }
-        if (!changed.length) return ok('Ninguna coincidencia; no se cambió nada. / No matches; nothing was changed.', { files: [], files_changed: 0, ...counts });
-        const written = await deps.core.writeFiles(a.changeset_id, site.id, f, changed.map((c) => ({ path: c.path, content: c.content })), await by());
-        const files = changed.map((c, i) => (written[i]?.ok ? { path: c.path, replacements: c.replacements, size: c.content.length, hash: sha256(c.content) } : { path: c.path, replacements: 0, error: written[i]?.error ?? 'Could not stage the file' }));
-        const done = files.filter((x) => !('error' in x));
-        const applied = done.reduce((n, x) => n + x.replacements, 0);
-        const summary = `${applied} reemplazo(s) en ${done.length} archivo(s) del borrador. / ${applied} replacement(s) in ${done.length} file(s) staged.`;
-        const data = { files, files_changed: done.length, ...counts, total_replacements: applied, matches_found: total };
-        return done.length ? ok(summary, data) : fail(summary, data);
+          const total = perPair.reduce((x, y) => x + y, 0);
+          const counts = {
+            total_replacements: total,
+            per_replacement: a.replacements.map((r, i) => ({ old_text: r.old_text.length > 80 ? `${r.old_text.slice(0, 80)}…` : r.old_text, count: perPair[i] })),
+            files_searched: scanned,
+            ...(skipped.length ? { skipped: skipped.slice(0, SKIPPED_LIST_MAX), skipped_total: skipped.length } : {}),
+          };
+          const perFile = changed.map((c) => ({ path: c.path, replacements: c.replacements }));
+          if (a.expected_matches !== undefined && a.expected_matches !== total) {
+            return stop(fail(`Se esperaban ${a.expected_matches} coincidencias y hay ${total}; no se cambió nada. Revise con search_files. / Expected ${a.expected_matches} matches, found ${total}; nothing was changed. Check with search_files.`, { ...counts, files: perFile }));
+          }
+          if (changed.length > REPLACE_MAX_FILES) {
+            return stop(fail(`El cambio toca ${changed.length} archivos (máximo ${REPLACE_MAX_FILES} por llamada); no se cambió nada. Divídalo por carpeta. / The change touches ${changed.length} files (${REPLACE_MAX_FILES} per call at most); nothing was changed. Split it by folder.`, counts));
+          }
+          if (!changed.length) return stop(ok('Ninguna coincidencia; no se cambió nada. / No matches; nothing was changed.', { files: [], files_changed: 0, ...counts }));
+          return {
+            // The base is the content the replacement was worked out from, so the live file isn't read a second time.
+            files: changed.map((c) => ({ path: c.path, content: c.content, baseHash: c.base })),
+            finish: (written) => {
+              const files = changed.map((c, i) => (written[i]?.ok ? { path: c.path, replacements: c.replacements, size: c.content.length, hash: sha256(c.content) } : { path: c.path, replacements: 0, error: written[i]?.error ?? 'Could not stage the file' }));
+              const done = files.filter((x) => !('error' in x));
+              const applied = done.reduce((n, x) => n + x.replacements, 0);
+              const summary = `${applied} reemplazo(s) en ${done.length} archivo(s) del borrador. / ${applied} replacement(s) in ${done.length} file(s) staged.`;
+              const data = { files, files_changed: done.length, ...counts, total_replacements: applied, matches_found: total };
+              return done.length ? ok(summary, data) : fail(summary, data);
+            },
+          };
+        });
       })(),
   );
 
@@ -943,7 +969,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
         `Sends the user's feedback about AI Connect to the CR Servers support team. It sends the text in message, together with the site's domain, the name of this app, the reference of the last failed call and (with changeset_id) how many files the draft changes, and opens a support ticket in the user's CR Servers account, where staff reply. No file content is sent. Use it only when the user asks to report a bug, a problem or an idea to CR Servers: write the message in their language, show them the exact text, and send it only after they confirm. Never include passwords, keys or other people's personal data. Not for emergencies such as a site that is down: give the user the contact_support link from get_site_info. ≤${FEEDBACK_PER_DAY} messages per day.`,
       inputSchema: {
         kind: z.enum(FEEDBACK_KINDS).describe('bug: something works wrong. problem: the user could not do what they wanted. idea: a request or suggestion'),
-        message: z.string().trim().min(FEEDBACK_MIN_CHARS).max(FEEDBACK_MAX_CHARS).describe('The feedback as the user confirmed it: what they were doing, what happened and what they expected'),
+        message: z.string().trim().min(FEEDBACK_MIN_CHARS).max(FEEDBACK_MAX_CHARS).regex(/^[^\u0000-\u0008\u000b\u000c\u000e-\u001f]*$/, 'No control characters').describe('The feedback as the user confirmed it: what they were doing, what happened and what they expected'),
         changeset_id: z.string().optional().describe('The draft the feedback is about, if any'),
         site: SITE,
       },

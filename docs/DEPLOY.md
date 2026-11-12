@@ -112,7 +112,7 @@ The request log has the same ref (`kubectl -n crservers-connector logs deploy/co
 kubectl -n crservers-connector exec connector-postgres-0 -- psql -U connector -d connector -c \
   "SELECT at, kind, domain, app, last_failed_ref, ticket, delivered_at, left(message, 200) AS message FROM feedback WHERE ref = 'K7M2PQ'"
 
-# Messages whose ticket could not be opened yet (retried every 15 minutes for 3 days)
+# Messages whose ticket could not be opened yet (retried for 3 days, with growing waits)
 kubectl -n crservers-connector exec connector-postgres-0 -- psql -U connector -d connector -c \
   "SELECT at, ref, kind, domain FROM feedback WHERE delivered_at IS NULL ORDER BY at DESC"
 ```

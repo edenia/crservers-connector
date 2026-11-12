@@ -39,6 +39,11 @@ describe('exact text search and replace', () => {
     expect(ex[1]!.text).toMatch(/^…x+btn-oldy+…$/);
     expect(excerpts(text, 'btn-old', true, 1)).toHaveLength(1);
     expect(excerpts('A\nB\nhOLA', 'hola', false)[0]).toEqual({ line: 3, text: 'hOLA' });
+    // Lower-casing changes this text's length ("İ" becomes two characters): positions still point at the match.
+    const turkish = `${'İ'.repeat(200)}\nver el BOTÓN aquí`;
+    expect(countOccurrences(turkish, 'botón', false)).toBe(1);
+    expect(excerpts(turkish, 'botón', false)).toEqual([{ line: 2, text: 'ver el BOTÓN aquí' }]);
+    expect(countOccurrences('a.b A.B axb', 'A.b', false)).toBe(2);
   });
 
   it('leaves out secrets, other sites, binary files and big text', () => {

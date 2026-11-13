@@ -90,7 +90,7 @@ More detail: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 | `preview_changeset` | What will change, plus the conflict check (required before publishing) |
 | `publish`, `list_releases`, `revert_release` | Go live, see history, undo |
 | `get_activity_log` | Who changed what, and when |
-| `send_feedback` | Sends the user's bug report, problem or idea to CR Servers support as a ticket in their account, after they confirm the text |
+| `contact_support` | Sends the user's message to CR Servers support (a bug, a problem, a question or an idea, about AI Connect or anything else in their account) as a ticket in their account, after they confirm the text |
 
 Every tool declares its MCP annotations (`readOnlyHint`, `destructiveHint`, `openWorldHint`, `idempotentHint`), so AI hosts ask the user before anything goes live.
 

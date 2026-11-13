@@ -3,15 +3,19 @@ import type { ClientAreaApi } from '../auth/clientarea.js';
 import { newRef } from '../crypto.js';
 
 /**
- * Feedback from the chat (send_feedback): a bug, a problem or an idea, in the user's words, written by
- * the assistant and confirmed by the user. Stored with what support needs to place it (site, app, the
+ * Messages to CR Servers support from the chat (contact_support): a bug, a problem, a question or an idea
+ * about AI Connect or anything else in the client's account (website, email, domains, billing), in the
+ * user's words, written by the assistant and confirmed by the user. Stored with what support needs to place it (site, app, the
  * reference of the last failed call) and delivered as a support ticket in the client's own account
  * through the client area. The row is saved first: a client area that is down delays the ticket, never
  * loses the feedback (retried by retryUndelivered, with growing waits, for 3 days). Kept RETENTION.feedbackDays (src/db/cleanup.ts),
  * stated in the privacy policy.
  */
-export const FEEDBACK_KINDS = ['bug', 'idea', 'problem'] as const;
+export const FEEDBACK_KINDS = ['bug', 'problem', 'question', 'idea'] as const;
 export type FeedbackKind = (typeof FEEDBACK_KINDS)[number];
+/** What the message is about: the client area sends each to its support department. */
+export const FEEDBACK_ABOUT = ['ai_connect', 'website', 'email', 'domain', 'billing', 'other'] as const;
+export type FeedbackAbout = (typeof FEEDBACK_ABOUT)[number];
 
 export const FEEDBACK_MIN_CHARS = 10;
 export const FEEDBACK_MAX_CHARS = 2000;
@@ -24,6 +28,7 @@ const RETRY_BASE_S = 300;
 
 export interface FeedbackInput {
   kind: FeedbackKind;
+  about: FeedbackAbout;
   message: string;
   siteId: string;
   serviceId: number;
@@ -44,7 +49,7 @@ export interface FeedbackResult {
 
 export class FeedbackLimit extends Error {}
 
-type Row = { id: string; ref: string; kind: FeedbackKind; message: string; service_id: number; domain: string; app: string | null; last_failed_ref: string | null; draft: FeedbackInput['draft'] | null };
+type Row = { id: string; ref: string; kind: FeedbackKind; about: FeedbackAbout; message: string; service_id: number; domain: string; app: string | null; last_failed_ref: string | null; draft: FeedbackInput['draft'] | null };
 
 export class FeedbackService {
   constructor(
@@ -77,10 +82,10 @@ export class FeedbackService {
       );
       // next_attempt_at: the first delivery (right after this) owns the row for a while; the retry job leaves it alone.
       const row: Row = (await client.query(
-        `INSERT INTO feedback (ref, kind, message, site_id, service_id, domain, grant_id, client_id, app, last_failed_ref, draft, attempts, next_attempt_at)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, now() + make_interval(secs => $12))
-         RETURNING id, ref, kind, message, service_id, domain, app, last_failed_ref, draft`,
-        [newRef(), f.kind, f.message, f.siteId, f.serviceId, f.domain, f.grantId ?? null, f.clientId, f.app.slice(0, 60), failed.rows[0]?.ref ?? null, f.draft ? JSON.stringify(f.draft) : null, RETRY_BASE_S],
+        `INSERT INTO feedback (ref, kind, message, site_id, service_id, domain, grant_id, client_id, app, last_failed_ref, draft, attempts, next_attempt_at, about)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 1, now() + make_interval(secs => $12), $13)
+         RETURNING id, ref, kind, about, message, service_id, domain, app, last_failed_ref, draft`,
+        [newRef(), f.kind, f.message, f.siteId, f.serviceId, f.domain, f.grantId ?? null, f.clientId, f.app.slice(0, 60), failed.rows[0]?.ref ?? null, f.draft ? JSON.stringify(f.draft) : null, RETRY_BASE_S, f.about],
       )).rows[0];
       await client.query('COMMIT');
       return row;
@@ -100,6 +105,7 @@ export class FeedbackService {
         serviceId: row.service_id,
         domain: row.domain,
         kind: row.kind,
+        about: row.about,
         message: row.message,
         reference: row.ref,
         app: row.app ?? '',
@@ -128,7 +134,7 @@ export class FeedbackService {
          SELECT id FROM feedback
          WHERE delivered_at IS NULL AND next_attempt_at <= now() AND at > now() - make_interval(days => $1)
          ORDER BY next_attempt_at LIMIT 20 FOR UPDATE SKIP LOCKED)
-       RETURNING id, ref, kind, message, service_id, domain, app, last_failed_ref, draft`,
+       RETURNING id, ref, kind, about, message, service_id, domain, app, last_failed_ref, draft`,
       [RETRY_DAYS, RETRY_BASE_S],
     )).rows;
     let delivered = 0;

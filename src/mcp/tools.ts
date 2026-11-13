@@ -12,7 +12,7 @@ import { contactFormInfo, readContactForm } from '../deploy/components.js';
 import { readSiteGuide, siteGuideInfo, siteGuideNote } from '../deploy/siteguide.js';
 import { help, helpInfo, pathHelp } from './help.js';
 import { EXCERPTS_PER_FILE, REPLACE_MAX_FILES, SCAN_MAX_BYTES, SCAN_MAX_FILES, SEARCH_MAX_RESULTS, countOccurrences, excerpts, inScope, normalizeExtensions, replaceEvery, skipReason, TooLarge, type SkipReason } from './bulk.js';
-import { FEEDBACK_KINDS, FEEDBACK_MAX_CHARS, FEEDBACK_MIN_CHARS, FEEDBACK_PER_DAY, FeedbackLimit, type FeedbackService } from '../feedback/feedback.js';
+import { FEEDBACK_ABOUT, FEEDBACK_KINDS, FEEDBACK_MAX_CHARS, FEEDBACK_MIN_CHARS, FEEDBACK_PER_DAY, FeedbackLimit, type FeedbackService } from '../feedback/feedback.js';
 import type { AuditLog } from '../deploy/pgstores.js';
 import type { SiteFs } from '../deploy/sitefs.js';
 import type { PreviewService } from '../preview/preview.js';
@@ -47,7 +47,7 @@ export interface McpDeps {
   support?: Pick<SupportLog, 'record'>;
   /** Re-checks a site's subdomain folders with the client area (src/auth/layout.ts). */
   layout?: Pick<LayoutSync, 'fresh'>;
-  /** Feedback from the chat to CR Servers (src/feedback/feedback.ts). */
+  /** Messages from the chat to CR Servers support (src/feedback/feedback.ts). */
   feedback?: Pick<FeedbackService, 'send'>;
 }
 
@@ -318,7 +318,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
         max_per_write_call: { files: MAX_CALL_FILES, mb: MAX_CALL_BYTES / MB },
         max_per_copy_call: { copies: COPY_MAX, mb: COPY_MAX_BYTES / MB },
         search_and_replace: { text_file_max_mb: READ_TEXT_LIMIT / MB, files_looked_at_per_call: SCAN_MAX_FILES, mb_looked_at_per_call: SCAN_MAX_BYTES / MB, files_returned_per_search: SEARCH_MAX_RESULTS, files_changed_per_replace: REPLACE_MAX_FILES },
-        feedback_per_day: FEEDBACK_PER_DAY,
+        support_messages_per_day: FEEDBACK_PER_DAY,
         allowed_types: 'html htm css js mjs json xml txt md svg png jpg jpeg webp gif avif ico woff woff2 ttf otf mp4 webm mp3 pdf webmanifest, /.well-known/*',
         blocked: 'php and other server code, .htaccess, hidden files (except the site guide .htcrservers-guide.md)',
         max_site_guide_kb: SITE_GUIDE_MAX_BYTES / 1024,
@@ -962,28 +962,29 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
   );
 
   registerTool(
-    'send_feedback',
+    'contact_support',
     {
-      title: 'Send feedback to CR Servers',
+      title: 'Contact CR Servers support',
       description:
-        `Sends the user's feedback about AI Connect to the CR Servers support team. It sends the text in message, together with the site's domain, the name of this app, the reference of the last failed call and (with changeset_id) how many files the draft changes, and opens a support ticket in the user's CR Servers account, where staff reply. No file content is sent. Use it only when the user asks to report a bug, a problem or an idea to CR Servers: write the message in their language, show them the exact text, and send it only after they confirm. Never include passwords, keys or other people's personal data. Not for emergencies such as a site that is down: give the user the contact_support link from get_site_info. ≤${FEEDBACK_PER_DAY} messages per day.`,
+        `Sends a message from the user to the CR Servers support team: a bug, a problem, a question or an idea, about AI Connect or about anything else in their CR Servers account (their website, email, domains, billing). It sends the text in message, together with the site's domain, the name of this app, the reference of the last failed call and (with changeset_id) how many files the draft changes, and opens a support ticket in the user's CR Servers account, where staff reply. No file content is sent. Use it only when the user asks to contact, report to or ask CR Servers; when a help article from get_site_info answers their question, give them that link first. Write the message in their language, show them the exact text, and send it only after they confirm. Never include passwords, keys, card numbers or other people's personal data. Not for emergencies such as a site that is down: give the user the contact_support link from get_site_info. ≤${FEEDBACK_PER_DAY} messages per day.`,
       inputSchema: {
-        kind: z.enum(FEEDBACK_KINDS).describe('bug: something works wrong. problem: the user could not do what they wanted. idea: a request or suggestion'),
-        message: z.string().trim().min(FEEDBACK_MIN_CHARS).max(FEEDBACK_MAX_CHARS).regex(/^[^\u0000-\u0008\u000b\u000c\u000e-\u001f]*$/, 'No control characters').describe('The feedback as the user confirmed it: what they were doing, what happened and what they expected'),
-        changeset_id: z.string().optional().describe('The draft the feedback is about, if any'),
+        kind: z.enum(FEEDBACK_KINDS).describe('bug: something works wrong. problem: the user could not do what they wanted. question: the user needs an answer from staff. idea: a request or suggestion'),
+        about: z.enum(FEEDBACK_ABOUT).default('ai_connect').describe('What the message is about, so it reaches the right team: ai_connect (this connector and what the assistant did), website (the site or its hosting), email, domain, billing (invoices, payments, plans), other'),
+        message: z.string().trim().min(FEEDBACK_MIN_CHARS).max(FEEDBACK_MAX_CHARS).regex(/^[^\u0000-\u0008\u000b\u000c\u000e-\u001f]*$/, 'No control characters').describe('The message as the user confirmed it: what they were doing or need, what happened and what they expected'),
+        changeset_id: z.string().optional().describe('The draft the message is about, if any'),
         site: SITE,
       },
       annotations: { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     },
     async (a) => {
-      // Feedback about a draft that is gone (published, discarded, expired) still goes through, for the site named.
+      // A message about a draft that is gone (published, discarded, expired) still goes through, for the site named.
       const aboutDraft = a.changeset_id ? Boolean(await deps.core.draftSiteId(a.changeset_id)) : false;
       return run(aboutDraft ? { changesetId: a.changeset_id } : { site: a.site }, async ({ site, clientId, by }) => {
         if (!deps.feedback) return fail(`No disponible; escriba a soporte: ${help('contact_support').es} / Not available; contact support: ${help('contact_support').en}`);
         const s = aboutDraft ? await deps.core.summary(a.changeset_id!, site.id).catch(() => undefined) : undefined;
         try {
           const r = await deps.feedback.send({
-            kind: a.kind, message: a.message, siteId: site.id, serviceId: site.serviceId, domain: site.domain,
+            kind: a.kind, about: a.about, message: a.message, siteId: site.id, serviceId: site.serviceId, domain: site.domain,
             grantId: extra.grantId, clientId, app: await by(),
             ...(s ? { draft: { added: s.added.length, modified: s.modified.length, deleted: s.deleted.length } } : {}),
           });
@@ -991,7 +992,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
             r.ticket
               ? `Enviado a CR Servers (referencia ${r.reference}). Se abrió el ticket de soporte #${r.ticket} en la cuenta del usuario: ahí llega la respuesta. / Sent to CR Servers (reference ${r.reference}). Support ticket #${r.ticket} was opened in the user's account: the reply arrives there.`
               : `Enviado a CR Servers (referencia ${r.reference}). El equipo de soporte lo recibió y responderá en un ticket en la cuenta del usuario. / Sent to CR Servers (reference ${r.reference}). The support team has it and will reply in a ticket in the user's account.`,
-            { sent: true, reference: r.reference, ...(r.ticket ? { ticket: r.ticket } : {}), site: site.domain, kind: a.kind },
+            { sent: true, reference: r.reference, ...(r.ticket ? { ticket: r.ticket } : {}), site: site.domain, kind: a.kind, about: a.about },
           );
         } catch (e) {
           if (e instanceof FeedbackLimit) return fail(`Ya se enviaron ${FEEDBACK_PER_DAY} mensajes en 24 horas desde esta conexión; para algo más, escriba a soporte: ${help('contact_support').es} / This connection already sent ${FEEDBACK_PER_DAY} messages in 24 hours; for anything else, contact support: ${help('contact_support').en}`);

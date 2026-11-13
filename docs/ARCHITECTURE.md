@@ -20,7 +20,7 @@ The connector never sees the client's password.
 
 1. The AI host starts a standard OAuth authorization request (PKCE S256, `resource` = this server's MCP URL).
 2. The connector records the request and sets a short-lived cookie that ties the flow to this browser. It then sends the browser to the CR Servers client area with a signed request (HMAC) that names the asking app.
-3. The client signs in there (with 2FA if enabled), sees which app is asking and what it can't do, ticks one or more sites and picks a permission (*edit and publish* or *preview only*), and confirms.
+3. The client signs in there (with 2FA if enabled; password, Google or GitHub). The client area keeps the signed request in its own short-lived cookie, so it comes back to the consent screen after any sign-in, including a new account made with Google or GitHub (plugin 0.8.3). A client with no hosting plan is offered one there instead of a dead end. The client then sees which app is asking and what it can't do, ticks one or more sites and picks a permission (*edit and publish* or *preview only*), and confirms.
 4. The client area redirects back with a one-time code. The connector redeems it server-to-server and gets the chosen sites. The client area enforces single use and a 60-second expiry, and re-checks that the client owns each site's hosting service and that it is active.
 5. The connector issues its own authorization code back to the AI host, with `iss` (RFC 9207). The binding cookie must match, so nobody can trick a client into linking their site to someone else's AI app.
 

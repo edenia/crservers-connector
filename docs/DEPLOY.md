@@ -44,7 +44,7 @@ NAMESPACE=crservers-connector-staging envsubst '${NAMESPACE}' < k8s/bootstrap/de
 | `BACKUPS` | variable | `off` skips the daily dump job (staging) |
 | `KUBE_CONFIG_DATA` | secret | Base64 kubeconfig for the namespace-scoped deploy account |
 | `POSTGRES_PASSWORD` | secret | Database password |
-| `CLIENT_AREA_API_ID`, `CLIENT_AREA_API_KEY` | secret | Server-to-server key for redeeming sign-in codes, refreshing site layouts and opening feedback tickets (IP-restricted, least privilege: the plugin's `module` call, `getAccountDetailsBasic` and, since v0.9.0, `addTicket`) |
+| `CLIENT_AREA_API_ID`, `CLIENT_AREA_API_KEY` | secret | Server-to-server key for redeeming sign-in codes, refreshing site layouts and opening feedback tickets (IP-restricted, least privilege: the plugin's `module` call, `getClientAccounts` and `getAccountDetailsBasic` (the plugin lists the client's services with this key when it redeems a sign-in code: without them no connection can finish) and, since v0.9.0, `addTicket`) |
 | `REQ_KEY` | secret | 32 random bytes, base64url. Shared with the client-area extension to sign sign-in requests. |
 | `ENCRYPTION_KEY` | secret | 32 random bytes, base64url. Encrypts stored FTP credentials. |
 

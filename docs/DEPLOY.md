@@ -117,4 +117,4 @@ kubectl -n crservers-connector exec connector-postgres-0 -- psql -U connector -d
   "SELECT at, ref, kind, domain FROM feedback WHERE delivered_at IS NULL ORDER BY at DESC"
 ```
 
-A message with no ticket means the client area refused or could not be reached: the log line `feedback_delivery_failed` has the reason (most often the API key lacks `addTicket`, or the client-area plugin is older than 0.9.0).
+A message with no ticket means the client area refused or could not be reached: the log line `feedback_delivery_failed` has the reason, and `feedback_undelivered_gave_up` names the references given up on after 3 days (open those tickets by hand) (most often the API key lacks `addTicket`, or the client-area plugin is older than 0.9.0).

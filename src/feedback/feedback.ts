@@ -139,6 +139,13 @@ export class FeedbackService {
     )).rows;
     let delivered = 0;
     for (const r of rows) if (await this.deliver(r)) delivered++;
+    // Past the retry window: said once, loudly, so someone opens the ticket by hand (the user was told it was saved).
+    const gaveUp = (await this.pool.query(
+      `UPDATE feedback SET next_attempt_at = 'infinity'
+       WHERE delivered_at IS NULL AND next_attempt_at <> 'infinity' AND at <= now() - make_interval(days => $1) RETURNING ref`,
+      [RETRY_DAYS],
+    )).rows.map((r: { ref: string }) => r.ref);
+    if (gaveUp.length) console.error(JSON.stringify({ t: new Date().toISOString(), event: 'feedback_undelivered_gave_up', refs: gaveUp }));
     return delivered;
   }
 }

@@ -2062,6 +2062,8 @@ describe('contact_support', () => {
     expect(r.isError).toBe(false);
     expect(r.data).toMatchObject({ sent: true, reference: expect.any(String) });
     expect(r.data.ticket).toBeUndefined();
+    // Not delivered yet: the answer says so instead of promising a reply.
+    expect(r.text).toContain('could not be opened in the user\'s account yet');
     // The log names the reference and the reason, never the text.
     expect(warned.join('\n')).toContain(r.data.reference);
     expect(warned.join('\n')).not.toContain('teléfono');
@@ -2075,6 +2077,20 @@ describe('contact_support', () => {
     expect(tickets.length).toBe(before + 1);
     expect(await feedbackService.retryUndelivered()).toBe(0);
 
+    // A message never delivered within the retry window is named once in the log, then left alone.
+    await pool.query(`INSERT INTO feedback (ref, kind, message, site_id, service_id, domain, client_id, at) VALUES ('OLDONE', 'bug', 'viejo', gen_random_uuid(), 15, 'uat.example', 'c', now() - interval '4 days')`);
+    const errors: string[] = [];
+    const origError = console.error;
+    console.error = (m: string) => errors.push(m);
+    try {
+      expect(await feedbackService.retryUndelivered()).toBe(0);
+      expect(await feedbackService.retryUndelivered()).toBe(0);
+    } finally {
+      console.error = origError;
+    }
+    expect(errors.filter((e) => e.includes('feedback_undelivered_gave_up'))).toHaveLength(1);
+    expect(errors.join()).toContain('OLDONE');
+    expect(errors.join()).not.toContain('viejo');
     // The rest of the day's allowance and three more, all at once: exactly the allowance gets through.
     const burst = await Promise.all(Array.from({ length: FEEDBACK_PER_DAY + 2 }, (_, i) => call(c, 'contact_support', { kind: 'idea', message: `Idea número ${i} para el conector.` })));
     expect(burst.filter((x) => !x.isError).length).toBe(FEEDBACK_PER_DAY - 1);

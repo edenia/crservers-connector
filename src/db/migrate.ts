@@ -359,6 +359,15 @@ const MIGRATIONS: { id: string; sql: string }[] = [
       CREATE INDEX feedback_undelivered ON feedback (next_attempt_at) WHERE delivered_at IS NULL;
     `,
   },
+  {
+    // contact_support (was send_feedback before its first release): questions too, and what the message is about.
+    id: '017_feedback_about',
+    sql: `
+      ALTER TABLE feedback DROP CONSTRAINT feedback_kind_check;
+      ALTER TABLE feedback ADD CONSTRAINT feedback_kind_check CHECK (kind IN ('bug', 'problem', 'question', 'idea'));
+      ALTER TABLE feedback ADD COLUMN about text NOT NULL DEFAULT 'ai_connect';
+    `,
+  },
 ];
 
 export async function migrate(pool: Pool): Promise<string[]> {

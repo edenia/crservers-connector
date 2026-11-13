@@ -888,9 +888,9 @@
       }
     },
     {
-      "name": "send_feedback",
-      "title": "Send feedback to CR Servers",
-      "description": "Sends the user's feedback about AI Connect to the CR Servers support team. It sends the text in message, together with the site's domain, the name of this app, the reference of the last failed call and (with changeset_id) how many files the draft changes, and opens a support ticket in the user's CR Servers account, where staff reply. No file content is sent. Use it only when the user asks to report a bug, a problem or an idea to CR Servers: write the message in their language, show them the exact text, and send it only after they confirm. Never include passwords, keys or other people's personal data. Not for emergencies such as a site that is down: give the user the contact_support link from get_site_info. ≤10 messages per day.",
+      "name": "contact_support",
+      "title": "Contact CR Servers support",
+      "description": "Sends a message from the user to the CR Servers support team: a bug, a problem, a question or an idea, about AI Connect or about anything else in their CR Servers account (their website, email, domains, billing). It sends the text in message, together with the site's domain, the name of this app, the reference of the last failed call and (with changeset_id) how many files the draft changes, and opens a support ticket in the user's CR Servers account, where staff reply. No file content is sent. Use it only when the user asks to contact, report to or ask CR Servers; when a help article from get_site_info answers their question, give them that link first. Write the message in their language, show them the exact text, and send it only after they confirm. Never include passwords, keys, card numbers or other people's personal data. Not for emergencies such as a site that is down: give the user the support contact page from the help links of get_site_info. ≤10 messages per day.",
       "inputSchema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
@@ -899,20 +899,34 @@
             "type": "string",
             "enum": [
               "bug",
-              "idea",
-              "problem"
+              "problem",
+              "question",
+              "idea"
             ],
-            "description": "bug: something works wrong. problem: the user could not do what they wanted. idea: a request or suggestion"
+            "description": "bug: something works wrong. problem: the user could not do what they wanted. question: the user needs an answer from staff. idea: a request or suggestion"
+          },
+          "about": {
+            "default": "ai_connect",
+            "description": "What the message is about, so it reaches the right team: ai_connect (this connector and what the assistant did), website (the site or its hosting), email, domain, billing (invoices, payments, plans), other",
+            "type": "string",
+            "enum": [
+              "ai_connect",
+              "website",
+              "email",
+              "domain",
+              "billing",
+              "other"
+            ]
           },
           "message": {
             "type": "string",
             "minLength": 10,
             "maxLength": 2000,
             "pattern": "^[^\\u0000-\\u0008\\u000b\\u000c\\u000e-\\u001f]*$",
-            "description": "The feedback as the user confirmed it: what they were doing, what happened and what they expected"
+            "description": "The message as the user confirmed it: what they were doing or need, what happened and what they expected"
           },
           "changeset_id": {
-            "description": "The draft the feedback is about, if any",
+            "description": "The draft the message is about, if any",
             "type": "string"
           },
           "site": {
@@ -931,7 +945,7 @@
         "destructiveHint": false,
         "idempotentHint": false,
         "openWorldHint": true,
-        "title": "Send feedback to CR Servers"
+        "title": "Contact CR Servers support"
       },
       "execution": {
         "taskSupport": "forbidden"

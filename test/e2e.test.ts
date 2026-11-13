@@ -483,7 +483,7 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     const { tools } = await c.listTools();
     const byName = Object.fromEntries(tools.map((t) => [t.name, t]));
     expect(Object.keys(byName).sort()).toEqual(
-      ['add_attachments', 'copy_files', 'replace_in_files', 'search_files', 'send_feedback', 'delete_files', 'discard_changeset', 'edit_file', 'import_from_url', 'get_activity_log', 'get_upload_link', 'get_site_info', 'get_usage_limits', 'list_files', 'list_releases', 'list_sites', 'preview_changeset', 'publish', 'read_file', 'revert_release', 'start_changeset', 'write_files'].sort(),
+      ['add_attachments', 'copy_files', 'replace_in_files', 'search_files', 'contact_support', 'delete_files', 'discard_changeset', 'edit_file', 'import_from_url', 'get_activity_log', 'get_upload_link', 'get_site_info', 'get_usage_limits', 'list_files', 'list_releases', 'list_sites', 'preview_changeset', 'publish', 'read_file', 'revert_release', 'start_changeset', 'write_files'].sort(),
     );
     for (const t of tools) {
       expect(t.annotations, t.name).toMatchObject({ readOnlyHint: expect.any(Boolean), destructiveHint: expect.any(Boolean), openWorldHint: expect.any(Boolean) });
@@ -496,8 +496,9 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     expect(byName.search_files!.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
     for (const t of ['copy_files', 'replace_in_files']) expect(byName[t]!.annotations, t).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
     // Says plainly that the user's text leaves the chat.
-    expect(byName.send_feedback!.annotations).toMatchObject({ readOnlyHint: false, openWorldHint: true });
-    expect(byName.send_feedback!.description).toMatch(/Sends the user's feedback .* to the CR Servers support team/);
+    expect(byName.contact_support!.annotations).toMatchObject({ readOnlyHint: false, openWorldHint: true });
+    expect(byName.contact_support!.description).toMatch(/^Sends a message from the user to the CR Servers support team/);
+    expect(byName.contact_support!.description).toContain('opens a support ticket in the user\'s CR Servers account');
     expect(c.getInstructions()).toContain('preview_changeset');
     await c.close();
   });
@@ -2007,7 +2008,7 @@ describe('copy, search and replace across files', () => {
   });
 });
 
-describe('send_feedback', () => {
+describe('contact_support', () => {
   it('stores the message with the site, the app and the last failed call, and opens a ticket in the client area', async () => {
     const c = await mcpClient(await connect('publish'));
     const failed = await call(c, 'list_files', { path: 'no-existe-feedback' });
@@ -2018,23 +2019,30 @@ describe('send_feedback', () => {
     await call(c, 'write_files', { changeset_id: d.changeset_id, files: [{ path: 'fb.html', content: 'x' }] });
     const before = tickets.length;
     const message = 'Al listar la carpeta de proyectos el asistente recibió un error.';
-    const r = await call(c, 'send_feedback', { kind: 'bug', message, changeset_id: d.changeset_id });
+    const r = await call(c, 'contact_support', { kind: 'bug', message, changeset_id: d.changeset_id });
     expect(r.isError).toBe(false);
-    expect(r.data).toMatchObject({ sent: true, reference: expect.stringMatching(/^[A-Z2-9]{6}$/), ticket: String(900 + before + 1), site: 'uat.example', kind: 'bug' });
+    expect(r.data).toMatchObject({ sent: true, reference: expect.stringMatching(/^[A-Z2-9]{6}$/), ticket: String(900 + before + 1), site: 'uat.example', kind: 'bug', about: 'ai_connect' });
     expect(r.text).toContain(r.data.reference);
     expect(JSON.stringify(r)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
-    expect(tickets.at(-1)).toEqual({ serviceId: 15, domain: 'uat.example', kind: 'bug', message, reference: r.data.reference, app: 'ChatGPT', lastFailedRef: ref, draft: { added: 1, modified: 0, deleted: 0 } });
+    expect(tickets.at(-1)).toEqual({ serviceId: 15, domain: 'uat.example', kind: 'bug', about: 'ai_connect', message, reference: r.data.reference, app: 'ChatGPT', lastFailedRef: ref, draft: { added: 1, modified: 0, deleted: 0 } });
     const row = (await pool.query('SELECT kind, message, domain, service_id, app, last_failed_ref, ticket, delivered_at FROM feedback WHERE ref = $1', [r.data.reference])).rows[0];
     expect(row).toMatchObject({ kind: 'bug', message, domain: 'uat.example', service_id: 15, app: 'ChatGPT', last_failed_ref: ref, ticket: r.data.ticket });
     expect(row.delivered_at).toBeTruthy();
 
+    // Not only about AI Connect: a billing question goes out as such, for the client area to route.
+    const billing = await call(c, 'contact_support', { kind: 'question', about: 'billing', message: '¿Puedo pagar mi factura de noviembre por transferencia?' });
+    expect(billing.isError).toBe(false);
+    expect(tickets.at(-1)).toMatchObject({ kind: 'question', about: 'billing', lastFailedRef: ref });
+    expect((await pool.query('SELECT kind, about FROM feedback WHERE ref = $1', [billing.data.reference])).rows[0]).toEqual({ kind: 'question', about: 'billing' });
+    expect((await call(c, 'contact_support', { kind: 'question', about: 'ventas', message: 'Un mensaje suficientemente largo.' })).isError).toBe(true);
+
     // A draft that is gone doesn't block feedback; too short a message or an unknown kind is refused.
     await call(c, 'discard_changeset', { changeset_id: d.changeset_id });
-    expect((await call(c, 'send_feedback', { kind: 'idea', message: 'Sería útil poder mover archivos.', changeset_id: d.changeset_id })).isError).toBe(false);
+    expect((await call(c, 'contact_support', { kind: 'idea', message: 'Sería útil poder mover archivos.', changeset_id: d.changeset_id })).isError).toBe(false);
     expect(tickets.at(-1)!.draft).toBeUndefined();
-    expect((await call(c, 'send_feedback', { kind: 'idea', message: 'corto' })).isError).toBe(true);
-    expect((await call(c, 'send_feedback', { kind: 'queja', message: 'Un mensaje suficientemente largo.' })).isError).toBe(true);
-    expect((await call(c, 'send_feedback', { kind: 'idea', message: 'Un mensaje con un car\u0000cter nulo.' })).isError).toBe(true);
+    expect((await call(c, 'contact_support', { kind: 'idea', message: 'corto' })).isError).toBe(true);
+    expect((await call(c, 'contact_support', { kind: 'queja', message: 'Un mensaje suficientemente largo.' })).isError).toBe(true);
+    expect((await call(c, 'contact_support', { kind: 'idea', message: 'Un mensaje con un car\u0000cter nulo.' })).isError).toBe(true);
     await c.close();
   });
 
@@ -2046,7 +2054,7 @@ describe('send_feedback', () => {
     console.warn = (m: string) => warned.push(m);
     let r: Awaited<ReturnType<typeof call>>;
     try {
-      r = await call(c, 'send_feedback', { kind: 'problem', message: 'No pude subir las fotos desde el teléfono.' });
+      r = await call(c, 'contact_support', { kind: 'problem', message: 'No pude subir las fotos desde el teléfono.' });
     } finally {
       console.warn = warn;
       ticketsDown = false;
@@ -2054,6 +2062,8 @@ describe('send_feedback', () => {
     expect(r.isError).toBe(false);
     expect(r.data).toMatchObject({ sent: true, reference: expect.any(String) });
     expect(r.data.ticket).toBeUndefined();
+    // Not delivered yet: the answer says so instead of promising a reply.
+    expect(r.text).toContain('could not be opened in the user\'s account yet');
     // The log names the reference and the reason, never the text.
     expect(warned.join('\n')).toContain(r.data.reference);
     expect(warned.join('\n')).not.toContain('teléfono');
@@ -2067,15 +2077,29 @@ describe('send_feedback', () => {
     expect(tickets.length).toBe(before + 1);
     expect(await feedbackService.retryUndelivered()).toBe(0);
 
+    // A message never delivered within the retry window is named once in the log, then left alone.
+    await pool.query(`INSERT INTO feedback (ref, kind, message, site_id, service_id, domain, client_id, at) VALUES ('OLDONE', 'bug', 'viejo', gen_random_uuid(), 15, 'uat.example', 'c', now() - interval '4 days')`);
+    const errors: string[] = [];
+    const origError = console.error;
+    console.error = (m: string) => errors.push(m);
+    try {
+      expect(await feedbackService.retryUndelivered()).toBe(0);
+      expect(await feedbackService.retryUndelivered()).toBe(0);
+    } finally {
+      console.error = origError;
+    }
+    expect(errors.filter((e) => e.includes('feedback_undelivered_gave_up'))).toHaveLength(1);
+    expect(errors.join()).toContain('OLDONE');
+    expect(errors.join()).not.toContain('viejo');
     // The rest of the day's allowance and three more, all at once: exactly the allowance gets through.
-    const burst = await Promise.all(Array.from({ length: FEEDBACK_PER_DAY + 2 }, (_, i) => call(c, 'send_feedback', { kind: 'idea', message: `Idea número ${i} para el conector.` })));
+    const burst = await Promise.all(Array.from({ length: FEEDBACK_PER_DAY + 2 }, (_, i) => call(c, 'contact_support', { kind: 'idea', message: `Idea número ${i} para el conector.` })));
     expect(burst.filter((x) => !x.isError).length).toBe(FEEDBACK_PER_DAY - 1);
-    const over = await call(c, 'send_feedback', { kind: 'idea', message: 'Una idea más de la cuenta.' });
+    const over = await call(c, 'contact_support', { kind: 'idea', message: 'Una idea más de la cuenta.' });
     expect(over.isError).toBe(true);
     expect(over.text).toContain('crservers.com');
     // Another connection has its own allowance.
     const c2 = await mcpClient(await connect('publish'));
-    expect((await call(c2, 'send_feedback', { kind: 'idea', message: 'Desde otra conexión sí pasa.' })).isError).toBe(false);
+    expect((await call(c2, 'contact_support', { kind: 'idea', message: 'Desde otra conexión sí pasa.' })).isError).toBe(false);
     await c.close();
     await c2.close();
   });

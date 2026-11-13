@@ -106,15 +106,15 @@ kubectl -n crservers-connector exec connector-postgres-0 -- psql -U connector -d
 
 The request log has the same ref (`kubectl -n crservers-connector logs deploy/connector | grep K7Q2MD`), next to the stack trace for internal errors. A session start (`initialize`) with no tool calls after it means the app connected and then nothing reached the connector: the problem is on the client side or its network.
 
-**Feedback sent from the chat** (`send_feedback`) is in the `feedback` table, kept 12 months, with the reference the assistant showed the client, the reference of that app's last failed call on the site, and the ticket the client area opened:
+**Messages sent to support from the chat** (`contact_support`) are in the `feedback` table, kept 12 months, with the reference the assistant showed the client, the reference of that app's last failed call on the site, and the ticket the client area opened:
 
 ```sh
 kubectl -n crservers-connector exec connector-postgres-0 -- psql -U connector -d connector -c \
-  "SELECT at, kind, domain, app, last_failed_ref, ticket, delivered_at, left(message, 200) AS message FROM feedback WHERE ref = 'K7M2PQ'"
+  "SELECT at, kind, about, domain, app, last_failed_ref, ticket, delivered_at, left(message, 200) AS message FROM feedback WHERE ref = 'K7M2PQ'"
 
 # Messages whose ticket could not be opened yet (retried for 3 days, with growing waits)
 kubectl -n crservers-connector exec connector-postgres-0 -- psql -U connector -d connector -c \
   "SELECT at, ref, kind, domain FROM feedback WHERE delivered_at IS NULL ORDER BY at DESC"
 ```
 
-A message with no ticket means the client area refused or could not be reached: the log line `feedback_delivery_failed` has the reason (most often the API key lacks `addTicket`, or the client-area plugin is older than 0.9.0).
+A message with no ticket means the client area refused or could not be reached: the log line `feedback_delivery_failed` has the reason, and `feedback_undelivered_gave_up` names the references given up on after 3 days (open those tickets by hand) (most often the API key lacks `addTicket`, or the client-area plugin is older than 0.9.0).

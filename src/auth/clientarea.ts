@@ -81,11 +81,13 @@ export interface ClientAreaApi {
   feedback?(f: FeedbackTicket): Promise<{ ticket: string }>;
 }
 
-/** Feedback sent from the chat (src/feedback/feedback.ts), as the client area gets it. */
+/** A message to support sent from the chat (src/feedback/feedback.ts), as the client area gets it. */
 export interface FeedbackTicket {
   serviceId: number;
   domain: string;
-  kind: 'bug' | 'idea' | 'problem';
+  kind: 'bug' | 'problem' | 'question' | 'idea';
+  /** ai_connect, website, email, domain, billing or other: picks the support department. */
+  about: string;
   message: string;
   /** The reference shown to the user in the chat. */
   reference: string;
@@ -151,7 +153,7 @@ export class ClientAreaClient implements ClientAreaApi {
   async feedback(f: FeedbackTicket): Promise<{ ticket: string }> {
     const body = new URLSearchParams({
       api_id: this.apiId, api_key: this.apiKey, call: 'module', module: 'crsconnect', fn: 'feedback',
-      service_id: String(f.serviceId), domain: f.domain, kind: f.kind, message: f.message, reference: f.reference, app: f.app,
+      service_id: String(f.serviceId), domain: f.domain, kind: f.kind, about: f.about, message: f.message, reference: f.reference, app: f.app,
       ...(f.lastFailedRef ? { last_failed_ref: f.lastFailedRef } : {}),
       ...(f.draft ? { draft: `${f.draft.added},${f.draft.modified},${f.draft.deleted}` } : {}),
     });

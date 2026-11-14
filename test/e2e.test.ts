@@ -493,6 +493,7 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     }
     expect(byName.publish!.annotations).toMatchObject({ destructiveHint: true, openWorldHint: true, readOnlyHint: false });
     expect(byName.read_file!.annotations).toMatchObject({ readOnlyHint: true });
+    expect(byName.copy_files!.inputSchema.properties).not.toHaveProperty('overwrite');
     expect(byName.search_files!.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
     for (const t of ['copy_files', 'replace_in_files']) expect(byName[t]!.annotations, t).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
     // Says plainly that the user's text leaves the chat.
@@ -587,6 +588,22 @@ describe('placeholder files of a new hosting account', () => {
       for (const [p, f] of saved) siteFs.files.set(p, f);
     }
   }
+
+  it('a copy never brings the home page, so it never makes a publish remove the placeholder files', () =>
+    onFreshSite(async () => {
+      const before = [...siteFs.files.keys()].sort();
+      const c = await mcpClient(await connect('publish'));
+      const { data: d } = await call(c, 'start_changeset');
+      const r = await call(c, 'copy_files', { changeset_id: d.changeset_id, copies: [{ from: 'index.html', to: 'index.htm' }, { from: 'index.html', to: 'pagina.html' }] });
+      expect(r.data.results.map((x: Structured) => x.ok)).toEqual([false, true]);
+      expect(r.data.results[0].error).toContain('home page');
+      const pv = await call(c, 'preview_changeset', { changeset_id: d.changeset_id });
+      expect(pv.data).toMatchObject({ added: ['pagina.html'], deleted: [] });
+      expect(pv.data.placeholder_files_removed).toBeUndefined();
+      await call(c, 'publish', { changeset_id: d.changeset_id });
+      expect([...siteFs.files.keys()].sort()).toEqual([...before, 'pagina.html'].sort());
+      await c.close();
+    }));
 
   it('the first home page removes them; the preview says so; revert brings them back', () =>
     onFreshSite(async () => {
@@ -1595,8 +1612,8 @@ describe('support correlation (#56)', () => {
     // Support records (written in the background): the link to site, service, client and app.
     type Row = { kind: string; ref: string | null; tool: string | null; ok: boolean | null; site_ids: string[]; service_id: number | null; client_id: string | null; app: string | null };
     let rows: Row[] = [];
-    // Records are written after the response, and other test files write theirs too: wait for these two rows, not for a count.
-    const landed = (rs: Row[]) => rs.some((r) => r.kind === 'initialize') && rs.some((r) => r.ref === ref);
+    // Records are written after the response, and other test files write theirs too: wait for the three rows checked below, not for a count.
+    const landed = (rs: Row[]) => rs.some((r) => r.kind === 'initialize') && rs.some((r) => r.ref === ref) && rs.some((r) => r.tool === 'get_site_info');
     for (let i = 0; i < 50 && !landed(rows); i++) {
       rows = (await pool.query<Row>('SELECT kind, ref, tool, ok, site_ids, service_id, client_id, app FROM support_events WHERE at >= $1 ORDER BY id', [since])).rows;
       if (!landed(rows)) await new Promise((r) => setTimeout(r, 20));
@@ -1953,7 +1970,7 @@ describe('copy, search and replace across files', () => {
       expect(r.data.results.map((x: Structured) => x.ok)).toEqual([true, true, false, false, false, false, false, false, true]);
       expect(r.data.results[7].error).toContain('UTF-8');
       expect(r.data.results[0]).toMatchObject({ replacements: [1, 2], size: expect.any(Number), hash: expect.stringMatching(/^[0-9a-f]{64}$/) });
-      expect(r.data.results[2].error).toContain('overwrite');
+      expect(r.data.results[2].error).toContain('already exists');
       expect(r.data.results[3].error).toContain('Replacement 1');
       expect(JSON.stringify(r)).not.toContain('hunter2');
       // The copy comes from the draft version of the source.
@@ -1961,14 +1978,27 @@ describe('copy, search and replace across files', () => {
       expect(copy.data.text).toBe(page('casa-cuatro').replaceAll('btn-old', 'btn').replace('Contacto', 'Escribanos'));
       expect((await call(c, 'read_file', { path: 'proyectos/foto-copia.png', changeset_id: id })).data).toMatchObject({ binary: true, size: 10 });
 
+      // A copy never replaces a file, also when an older client still sends overwrite: true.
       const over = await call(c, 'copy_files', { changeset_id: id, overwrite: true, copies: [{ from: 'proyectos/casa-dos.html', to: 'proyectos/casa-tres.html' }] });
-      expect(over.data.results[0].ok).toBe(true);
+      expect(over.isError).toBe(true);
+      expect(over.data.results[0]).toMatchObject({ ok: false, error: expect.stringContaining('already exists') });
+      // Deleting a live page in the draft doesn't open its path to a copy: that would replace it at publish.
+      await call(c, 'delete_files', { changeset_id: id, paths: ['proyectos/estilos.css'] });
+      const onto = await call(c, 'copy_files', { changeset_id: id, copies: [{ from: 'proyectos/casa-dos.html', to: './proyectos//estilos.css' }] });
+      expect(onto.isError).toBe(true);
+      expect(onto.data.results[0].error).toContain('the draft deletes');
+      // Nor to a folder's name, nor to the home page (the first home page of a new account removes its placeholder files).
+      const odd = await call(c, 'copy_files', { changeset_id: id, copies: [{ from: 'proyectos/casa-dos.html', to: 'proyectos' }, { from: 'proyectos/casa-dos.html', to: 'index.htm' }] });
+      expect(odd.isError).toBe(true);
+      expect(odd.data.results[0].error).toMatch(/folder already exists|not allowed/);
+      expect(odd.data.results[1].error).toContain('home page');
       const none = await call(c, 'copy_files', { changeset_id: id, copies: [{ from: 'index.html', to: 'index.html' }] });
       expect(none.isError).toBe(true);
 
       const pv = await call(c, 'preview_changeset', { changeset_id: id });
       expect(pv.data.added).toEqual(['proyectos/casa-cuatro.html', 'proyectos/foto-copia.png', 'proyectos/latin1-c.html']);
-      expect(pv.data.modified).toEqual(['proyectos/casa-tres.html', 'proyectos/casa-uno.html']);
+      expect(pv.data.modified).toEqual(['proyectos/casa-uno.html']);
+      expect(pv.data.deleted).toEqual(['proyectos/estilos.css']);
       expect(siteFs.files.has('proyectos/casa-cuatro.html')).toBe(false);
       await call(c, 'discard_changeset', { changeset_id: id });
       await c.close();

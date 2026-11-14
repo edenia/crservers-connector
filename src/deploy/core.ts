@@ -65,6 +65,8 @@ export interface ReadResult {
 /** The files of a site as the live site or a draft holds them (DeployCore.snapshot). */
 export interface SiteView {
   files: { path: string; size: number }[];
+  /** Live files the draft deletes (not in `files`). */
+  deleted: Set<string>;
   read: (path: string) => Promise<Buffer>;
 }
 
@@ -349,6 +351,7 @@ export class DeployCore {
     }
     return {
       files: [...sizes].map(([path, size]) => ({ path, size })).sort((x, y) => x.path.localeCompare(y.path)),
+      deleted: new Set(d?.deletes ?? []),
       read: async (path) => d?.writes.get(path) ?? fs.read(path),
     };
   }

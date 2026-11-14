@@ -44,6 +44,8 @@ describe('drafts and reads', () => {
     const view = await core.snapshot(SITE, fs, d.id);
     expect(view.files.map((f) => f.path)).toEqual([...livePaths.filter((p) => p !== gone), 'zz/new.html'].sort((x, y) => x.localeCompare(y)));
     expect(view.files.find((f) => f.path === 'zz/new.html')!.size).toBe(3);
+    expect([...view.deleted]).toEqual([gone]);
+    expect((await core.snapshot(SITE, fs)).deleted.size).toBe(0);
     expect((await view.read('index.html')).toString()).toBe('<h1>v2</h1>');
     expect((await (await core.snapshot(SITE, fs)).read('index.html')).toString()).toBe('<h1>v1</h1>');
   });

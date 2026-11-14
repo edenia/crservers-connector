@@ -728,7 +728,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
     {
       title: 'Copy files in draft',
       description:
-        `Saves copies of files at new paths in the draft stored on CR Servers (kept until published or discarded, at most 24 hours), without resending their content. Reversible: it only adds files to the draft and never replaces or deletes one, in the draft or on the live site: a copy to a path where a file already exists is refused, the draft can be dropped with discard_changeset, and nothing is live until publish. Each copy takes the draft version of \`from\` if the draft changed it, otherwise the live file. Use it to start a new page from an existing one: optional replacements change exact text in the copy (every occurrence; each old_text must appear at least once), and edit_file can change the rest. ≤${COPY_MAX} copies per call.`,
+        `Saves copies of files at new paths in the draft stored on CR Servers (kept until published or discarded, at most 24 hours), without resending their content. Reversible: it only adds new files to the draft. A copy to a path where a file already exists is refused, so it never replaces or deletes a file in the draft or on the live site (only publish changes the live site); the draft can be dropped with discard_changeset, and every publish can be undone with revert_release. Each copy takes the draft version of \`from\` if the draft changed it, otherwise the live file. Use it to start a new page from an existing one: optional replacements change exact text in the copy (every occurrence; each old_text must appear at least once), and edit_file can change the rest. ≤${COPY_MAX} copies per call.`,
       inputSchema: {
         changeset_id: z.string(),
         copies: z
@@ -766,6 +766,8 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
               if (writes.some((w) => w.path === to)) throw new Error('Another copy in this call already writes this path');
               // Never replaces a file: the tool is declared non-destructive, and a page copied over another one by mistake is real loss.
               if (sizes.has(to)) throw new Error('A file already exists at this path; choose another path for the copy');
+              // A live file the draft deletes is still a file the copy would replace at publish.
+              if (view.deleted.has(to)) throw new Error('This path is a live file that the draft deletes; choose another path for the copy');
               // Sizes are checked before the file is read: a copy is held in memory until the call ends.
               if (size > maxFileBytes(to)) throw new Error(`File too large (max ${maxFileBytes(to) / MB} MB)`);
               if (total + size > COPY_MAX_BYTES) throw new Error(`More than ${COPY_MAX_BYTES / MB} MB in one call; copy the rest in another call`);

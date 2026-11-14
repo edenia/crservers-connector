@@ -1966,12 +1966,18 @@ describe('copy, search and replace across files', () => {
       const over = await call(c, 'copy_files', { changeset_id: id, overwrite: true, copies: [{ from: 'proyectos/casa-dos.html', to: 'proyectos/casa-tres.html' }] });
       expect(over.isError).toBe(true);
       expect(over.data.results[0]).toMatchObject({ ok: false, error: expect.stringContaining('already exists') });
+      // Deleting a live page in the draft doesn't open its path to a copy: that would replace it at publish.
+      await call(c, 'delete_files', { changeset_id: id, paths: ['proyectos/estilos.css'] });
+      const onto = await call(c, 'copy_files', { changeset_id: id, copies: [{ from: 'proyectos/casa-dos.html', to: './proyectos//estilos.css' }] });
+      expect(onto.isError).toBe(true);
+      expect(onto.data.results[0].error).toContain('the draft deletes');
       const none = await call(c, 'copy_files', { changeset_id: id, copies: [{ from: 'index.html', to: 'index.html' }] });
       expect(none.isError).toBe(true);
 
       const pv = await call(c, 'preview_changeset', { changeset_id: id });
       expect(pv.data.added).toEqual(['proyectos/casa-cuatro.html', 'proyectos/foto-copia.png', 'proyectos/latin1-c.html']);
       expect(pv.data.modified).toEqual(['proyectos/casa-uno.html']);
+      expect(pv.data.deleted).toEqual(['proyectos/estilos.css']);
       expect(siteFs.files.has('proyectos/casa-cuatro.html')).toBe(false);
       await call(c, 'discard_changeset', { changeset_id: id });
       await c.close();

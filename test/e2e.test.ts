@@ -493,6 +493,7 @@ describe('MCP tools end to end (signed in through the OAuth flow)', () => {
     }
     expect(byName.publish!.annotations).toMatchObject({ destructiveHint: true, openWorldHint: true, readOnlyHint: false });
     expect(byName.read_file!.annotations).toMatchObject({ readOnlyHint: true });
+    expect(byName.copy_files!.inputSchema.properties).not.toHaveProperty('overwrite');
     expect(byName.search_files!.annotations).toMatchObject({ readOnlyHint: true, destructiveHint: false });
     for (const t of ['copy_files', 'replace_in_files']) expect(byName[t]!.annotations, t).toMatchObject({ readOnlyHint: false, destructiveHint: false, openWorldHint: false });
     // Says plainly that the user's text leaves the chat.
@@ -1953,7 +1954,7 @@ describe('copy, search and replace across files', () => {
       expect(r.data.results.map((x: Structured) => x.ok)).toEqual([true, true, false, false, false, false, false, false, true]);
       expect(r.data.results[7].error).toContain('UTF-8');
       expect(r.data.results[0]).toMatchObject({ replacements: [1, 2], size: expect.any(Number), hash: expect.stringMatching(/^[0-9a-f]{64}$/) });
-      expect(r.data.results[2].error).toContain('overwrite');
+      expect(r.data.results[2].error).toContain('already exists');
       expect(r.data.results[3].error).toContain('Replacement 1');
       expect(JSON.stringify(r)).not.toContain('hunter2');
       // The copy comes from the draft version of the source.
@@ -1961,14 +1962,16 @@ describe('copy, search and replace across files', () => {
       expect(copy.data.text).toBe(page('casa-cuatro').replaceAll('btn-old', 'btn').replace('Contacto', 'Escribanos'));
       expect((await call(c, 'read_file', { path: 'proyectos/foto-copia.png', changeset_id: id })).data).toMatchObject({ binary: true, size: 10 });
 
+      // A copy never replaces a file, also when an older client still sends overwrite: true.
       const over = await call(c, 'copy_files', { changeset_id: id, overwrite: true, copies: [{ from: 'proyectos/casa-dos.html', to: 'proyectos/casa-tres.html' }] });
-      expect(over.data.results[0].ok).toBe(true);
+      expect(over.isError).toBe(true);
+      expect(over.data.results[0]).toMatchObject({ ok: false, error: expect.stringContaining('already exists') });
       const none = await call(c, 'copy_files', { changeset_id: id, copies: [{ from: 'index.html', to: 'index.html' }] });
       expect(none.isError).toBe(true);
 
       const pv = await call(c, 'preview_changeset', { changeset_id: id });
       expect(pv.data.added).toEqual(['proyectos/casa-cuatro.html', 'proyectos/foto-copia.png', 'proyectos/latin1-c.html']);
-      expect(pv.data.modified).toEqual(['proyectos/casa-tres.html', 'proyectos/casa-uno.html']);
+      expect(pv.data.modified).toEqual(['proyectos/casa-uno.html']);
       expect(siteFs.files.has('proyectos/casa-cuatro.html')).toBe(false);
       await call(c, 'discard_changeset', { changeset_id: id });
       await c.close();

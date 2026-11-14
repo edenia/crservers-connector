@@ -728,7 +728,7 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
     {
       title: 'Copy files in draft',
       description:
-        `Copies files to new paths inside the draft stored on CR Servers, without resending their content (the live site doesn't change until publish). Each copy takes the draft version of \`from\` if the draft changed it, otherwise the live file. Use it to start a new page from an existing one: optional replacements change exact text in the copy (every occurrence; each old_text must appear at least once), and edit_file can change the rest. Refuses a \`to\` that already exists unless overwrite is true. ≤${COPY_MAX} copies per call.`,
+        `Saves copies of files at new paths in the draft stored on CR Servers (kept until published or discarded, at most 24 hours), without resending their content. Reversible: it only adds files to the draft and never replaces or deletes one, in the draft or on the live site: a copy to a path where a file already exists is refused, the draft can be dropped with discard_changeset, and nothing is live until publish. Each copy takes the draft version of \`from\` if the draft changed it, otherwise the live file. Use it to start a new page from an existing one: optional replacements change exact text in the copy (every occurrence; each old_text must appear at least once), and edit_file can change the rest. ≤${COPY_MAX} copies per call.`,
       inputSchema: {
         changeset_id: z.string(),
         copies: z
@@ -739,7 +739,6 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
           }))
           .min(1)
           .max(COPY_MAX),
-        overwrite: z.boolean().default(false).describe('Replace a file that already exists at `to`'),
       },
       annotations: DRAFT,
     },
@@ -765,7 +764,8 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
               if (size === undefined) throw new Error('File not found');
               assertWritable(to);
               if (writes.some((w) => w.path === to)) throw new Error('Another copy in this call already writes this path');
-              if (sizes.has(to) && !a.overwrite) throw new Error('A file already exists at this path; pass overwrite: true to replace it');
+              // Never replaces a file: the tool is declared non-destructive, and a page copied over another one by mistake is real loss.
+              if (sizes.has(to)) throw new Error('A file already exists at this path; choose another path for the copy');
               // Sizes are checked before the file is read: a copy is held in memory until the call ends.
               if (size > maxFileBytes(to)) throw new Error(`File too large (max ${maxFileBytes(to) / MB} MB)`);
               if (total + size > COPY_MAX_BYTES) throw new Error(`More than ${COPY_MAX_BYTES / MB} MB in one call; copy the rest in another call`);

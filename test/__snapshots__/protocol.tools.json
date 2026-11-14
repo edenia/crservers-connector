@@ -663,7 +663,7 @@
     {
       "name": "copy_files",
       "title": "Copy files in draft",
-      "description": "Copies files to new paths inside the draft stored on CR Servers, without resending their content (the live site doesn't change until publish). Each copy takes the draft version of `from` if the draft changed it, otherwise the live file. Use it to start a new page from an existing one: optional replacements change exact text in the copy (every occurrence; each old_text must appear at least once), and edit_file can change the rest. Refuses a `to` that already exists unless overwrite is true. ≤20 copies per call.",
+      "description": "Saves copies of files at new paths in the draft stored on CR Servers (kept until published or discarded, at most 24 hours), without resending their content. Reversible: it only adds files to the draft and never replaces or deletes one, in the draft or on the live site: a copy to a path where a file already exists is refused, the draft can be dropped with discard_changeset, and nothing is live until publish. Each copy takes the draft version of `from` if the draft changed it, otherwise the live file. Use it to start a new page from an existing one: optional replacements change exact text in the copy (every occurrence; each old_text must appear at least once), and edit_file can change the rest. ≤20 copies per call.",
       "inputSchema": {
         "$schema": "http://json-schema.org/draft-07/schema#",
         "type": "object",
@@ -722,11 +722,6 @@
                 "to"
               ]
             }
-          },
-          "overwrite": {
-            "default": false,
-            "description": "Replace a file that already exists at `to`",
-            "type": "boolean"
           }
         },
         "required": [

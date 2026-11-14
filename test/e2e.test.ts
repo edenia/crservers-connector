@@ -589,6 +589,22 @@ describe('placeholder files of a new hosting account', () => {
     }
   }
 
+  it('a copy never brings the home page, so it never makes a publish remove the placeholder files', () =>
+    onFreshSite(async () => {
+      const before = [...siteFs.files.keys()].sort();
+      const c = await mcpClient(await connect('publish'));
+      const { data: d } = await call(c, 'start_changeset');
+      const r = await call(c, 'copy_files', { changeset_id: d.changeset_id, copies: [{ from: 'index.html', to: 'index.htm' }, { from: 'index.html', to: 'pagina.html' }] });
+      expect(r.data.results.map((x: Structured) => x.ok)).toEqual([false, true]);
+      expect(r.data.results[0].error).toContain('home page');
+      const pv = await call(c, 'preview_changeset', { changeset_id: d.changeset_id });
+      expect(pv.data).toMatchObject({ added: ['pagina.html'], deleted: [] });
+      expect(pv.data.placeholder_files_removed).toBeUndefined();
+      await call(c, 'publish', { changeset_id: d.changeset_id });
+      expect([...siteFs.files.keys()].sort()).toEqual([...before, 'pagina.html'].sort());
+      await c.close();
+    }));
+
   it('the first home page removes them; the preview says so; revert brings them back', () =>
     onFreshSite(async () => {
       const before = new Map([...siteFs.files].map(([p, f]) => [p, f.data]));
@@ -1971,6 +1987,11 @@ describe('copy, search and replace across files', () => {
       const onto = await call(c, 'copy_files', { changeset_id: id, copies: [{ from: 'proyectos/casa-dos.html', to: './proyectos//estilos.css' }] });
       expect(onto.isError).toBe(true);
       expect(onto.data.results[0].error).toContain('the draft deletes');
+      // Nor to a folder's name, nor to the home page (the first home page of a new account removes its placeholder files).
+      const odd = await call(c, 'copy_files', { changeset_id: id, copies: [{ from: 'proyectos/casa-dos.html', to: 'proyectos' }, { from: 'proyectos/casa-dos.html', to: 'index.htm' }] });
+      expect(odd.isError).toBe(true);
+      expect(odd.data.results[0].error).toMatch(/folder already exists|not allowed/);
+      expect(odd.data.results[1].error).toContain('home page');
       const none = await call(c, 'copy_files', { changeset_id: id, copies: [{ from: 'index.html', to: 'index.html' }] });
       expect(none.isError).toBe(true);
 

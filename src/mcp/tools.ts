@@ -6,7 +6,7 @@ import { z } from 'zod';
 import { BY_ASSISTANT, BY_SERVER, BY_UPLOAD_LINK, DeployCore, DeployError, READ_TEXT_LIMIT, sha256, stalePreviewMessage } from '../deploy/core.js';
 import { ImportError, assertMediaMatches, fetchPublicUrl, type UrlFetcher } from '../deploy/fetchurl.js';
 import { MB, PathError, SITE_GUIDE_MAX_BYTES, assertWritable, isSecretPath, isTextPath, maxFileBytes, normalizeSiteDir, normalizeSitePath } from '../deploy/paths.js';
-import { isSkeletonPath } from '../deploy/skeleton.js';
+import { HOME_PAGES, isSkeletonPath } from '../deploy/skeleton.js';
 import { deployNote, deployedFrom, readDeployMarker } from '../deploy/deploymarker.js';
 import { contactFormInfo, readContactForm } from '../deploy/components.js';
 import { readSiteGuide, siteGuideInfo, siteGuideNote } from '../deploy/siteguide.js';
@@ -766,6 +766,11 @@ export function buildMcpServer(deps: McpDeps, auth: AuthInfo, trace: Trace = {})
               if (writes.some((w) => w.path === to)) throw new Error('Another copy in this call already writes this path');
               // Never replaces a file: the tool is declared non-destructive, and a page copied over another one by mistake is real loss.
               if (sizes.has(to)) throw new Error('A file already exists at this path; choose another path for the copy');
+              // A folder of that name: nothing would be replaced, but the publish could not put a file there.
+              if (view.files.some((x) => x.path.startsWith(`${to}/`))) throw new Error('A folder already exists at this path; choose another path for the copy');
+              // The first home page of a new hosting account also removes its placeholder files at publish
+              // (skeleton.ts): that is write_files' job, where the preview says so, never a side effect of a copy.
+              if (HOME_PAGES.includes(to)) throw new Error('The home page is not created by copying; write it with write_files');
               // A live file the draft deletes is still a file the copy would replace at publish.
               if (view.deleted.has(to)) throw new Error('This path is a live file that the draft deletes; choose another path for the copy');
               // Sizes are checked before the file is read: a copy is held in memory until the call ends.

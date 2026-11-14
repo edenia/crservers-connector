@@ -1612,8 +1612,8 @@ describe('support correlation (#56)', () => {
     // Support records (written in the background): the link to site, service, client and app.
     type Row = { kind: string; ref: string | null; tool: string | null; ok: boolean | null; site_ids: string[]; service_id: number | null; client_id: string | null; app: string | null };
     let rows: Row[] = [];
-    // Records are written after the response, and other test files write theirs too: wait for these two rows, not for a count.
-    const landed = (rs: Row[]) => rs.some((r) => r.kind === 'initialize') && rs.some((r) => r.ref === ref);
+    // Records are written after the response, and other test files write theirs too: wait for the three rows checked below, not for a count.
+    const landed = (rs: Row[]) => rs.some((r) => r.kind === 'initialize') && rs.some((r) => r.ref === ref) && rs.some((r) => r.tool === 'get_site_info');
     for (let i = 0; i < 50 && !landed(rows); i++) {
       rows = (await pool.query<Row>('SELECT kind, ref, tool, ok, site_ids, service_id, client_id, app FROM support_events WHERE at >= $1 ORDER BY id', [since])).rows;
       if (!landed(rows)) await new Promise((r) => setTimeout(r, 20));

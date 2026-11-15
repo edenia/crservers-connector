@@ -21,6 +21,8 @@ The connector never sees the client's password.
 1. The AI host starts a standard OAuth authorization request (PKCE S256, `resource` = this server's MCP URL).
 2. The connector records the request and sets a short-lived cookie that ties the flow to this browser. It then sends the browser to the CR Servers client area with a signed request (HMAC) that names the asking app.
 3. The client signs in there (with 2FA if enabled; password, Google or GitHub). The client area keeps the signed request in its own short-lived cookie, so it comes back to the consent screen after any sign-in, including a new account made with Google or GitHub (plugin 0.8.3). A client with no hosting plan is offered one there instead of a dead end. The client then sees which app is asking and what it can't do, ticks one or more sites and picks a permission (*edit and publish* or *preview only*), and confirms.
+
+   The person who signs in can be the account owner, a contact of the account, or a member of a team the account invited. The owner is offered every site. A contact or team member is offered only the sites of hosting services the owner gave them control panel access to, or none, with a message to ask the owner (plugin 0.9.2). The connector still records the connection under the account, so the owner sees and can remove it.
 4. The client area redirects back with a one-time code. The connector redeems it server-to-server and gets the chosen sites. The client area enforces single use and a 60-second expiry, and re-checks that the client owns each site's hosting service and that it is active.
 5. The connector issues its own authorization code back to the AI host, with `iss` (RFC 9207). The binding cookie must match, so nobody can trick a client into linking their site to someone else's AI app.
 
@@ -102,7 +104,7 @@ Clients manage access on the **AI Connect** page inside the client area. It's re
 - recent activity: drafts, publishes, undos, approvals, removed connections, settings changes, and which app did each;
 - the **Aprobar cada publicación** switch.
 
-The client area checks that the signed-in client owns the service, then calls the connector's client-area API server to server. Requests are signed with the shared request-signing key and carry a timestamp and a single-use nonce:
+The client area checks that the signed-in client owns the service (and, for a contact or team member, that the owner gave them control panel access to it), then calls the connector's client-area API server to server. Requests are signed with the shared request-signing key and carry a timestamp and a single-use nonce:
 
 | Endpoint | Body | Returns |
 |---|---|---|
